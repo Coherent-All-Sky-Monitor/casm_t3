@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "casm-t3"
+version = "0.1.0"
+description = "CASM T3: candidate plotting, classification and alerting"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "pyyaml",
+    "casm-t2",
+]
+
+[project.scripts]
+t3-dump-plotter = "casm_t3.apps.dump_plotter:main"
+
+[tool.setuptools.packages.find]
+include = ["casm_t3*"]
