@@ -27,8 +27,9 @@ from . import single_pulse
 
 NBEAM_TOTAL = 512
 
-# White-to-dark-blue ramp, matching transientX's candidate plots.
-WATERFALL_CMAP = "Blues"
+# transientX uses viridis for both image panels (candplot.cpp: ax_ft and
+# ax_dmt both pcolor with "viridis"); match it here.
+WATERFALL_CMAP = "viridis"
 
 
 def _block_mean_freqs(freqs_mhz: np.ndarray, ffactor: int) -> np.ndarray:
@@ -137,7 +138,7 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
 
     ax_dmt.imshow(dmt_disp, aspect="auto", origin="lower", interpolation="nearest",
                   extent=[t_wf[0], t_wf[-1], dms[0], dms[-1]], cmap=WATERFALL_CMAP)
-    ax_dmt.axhline(dm, color="red", lw=0.6, alpha=0.6)
+    ax_dmt.plot(0, dm, "o", ms=16, mfc="none", mec="red", mew=1.2)
     ax_dmt.set_ylabel(r"DM (pc cm$^{-3}$)")
     ax_dmt.set_xlabel("Time - event (s)")
 
