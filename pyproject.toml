@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 t3-dump-plotter = "casm_t3.apps.dump_plotter:main"
+t3-replot = "casm_t3.apps.replot:main"
 
 [tool.setuptools.packages.find]
 include = ["casm_t3*"]

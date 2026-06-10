@@ -32,6 +32,20 @@ logger = logging.getLogger("t3.dump_plotter")
 LOCAL_HOSTNAME = socket.gethostname().split(".")[0]
 
 
+def find_dump_files(dump_dir: Path, not_before: float,
+                    not_after: float | None = None) -> list[Path]:
+    """List .dada files in dump_dir whose mtime falls in the given window.
+
+    Triggers are rate-limited to >=120 s apart per stream, so a window of a
+    minute or so around a card's mtime isolates that card's dump from its
+    neighbours in the shared stream directory.
+    """
+    hits = [p for p in dump_dir.glob("*.dada")
+            if p.stat().st_mtime >= not_before
+            and (not_after is None or p.stat().st_mtime <= not_after)]
+    return sorted(hits, key=lambda p: p.name)
+
+
 def wait_for_dump(dump_dir: Path, after_mtime: float, timeout_s: float,
                   settle_s: float = 3.0) -> list[Path]:
     """Wait for new .dada files in dump_dir and for their sizes to settle."""
@@ -62,6 +76,30 @@ def ship_artifacts(files: list[Path], candname: str, archive_host: str, archive_
     logger.info("archived %s -> %s:%s", candname, archive_host, dest)
 
 
+def render_card(card: dict, dump_files: list[Path], out_png: Path) -> tuple[Path, dict]:
+    """Read the detection beam from dump_files and render the candidate figure.
+
+    Pure transform — no dump triggers, no artifact shipping, no alerting —
+    so the offline t3-replot CLI can share it safely with the daemon.
+    Returns the PNG path and the result record (card + provenance) for the
+    caller to persist or discard.
+    """
+    header, data = dump_reader.read_beams(dump_files, [card["local_beam"]])
+    event_utc = datetime.fromisoformat(card["event_utc"])
+    t_rel = (event_utc - header.t0).total_seconds()
+    if not 0 <= t_rel <= data.shape[2] * header.tsamp_s:
+        logger.warning("event time %.2fs falls outside dump of %.2fs — timing offset?",
+                       t_rel, data.shape[2] * header.tsamp_s)
+
+    png = plotting.make_candidate_figure(
+        data[0], header.freqs_mhz, header.tsamp_s, t_rel, card, out_png)
+
+    result = dict(card)
+    result.update(host=LOCAL_HOSTNAME, dump_files=[str(f) for f in dump_files],
+                  n_samples=int(data.shape[2]), plot=str(png))
+    return png, result
+
+
 def process_card(card_path: Path, args: argparse.Namespace) -> None:
     card = json.loads(card_path.read_text())
     candname = card["candname"]
@@ -73,21 +111,8 @@ def process_card(card_path: Path, args: argparse.Namespace) -> None:
     if not files:
         raise RuntimeError(f"no dump appeared in {dump_dir} within {args.dump_timeout}s")
 
-    header, data = dump_reader.read_beams(files, [card["local_beam"]])
-    event_utc = datetime.fromisoformat(card["event_utc"])
-    t_rel = (event_utc - header.t0).total_seconds()
-    if not 0 <= t_rel <= data.shape[2] * header.tsamp_s:
-        logger.warning("event time %.2fs falls outside dump of %.2fs — timing offset?",
-                       t_rel, data.shape[2] * header.tsamp_s)
-
     plots_dir = Path(args.plots_dir)
-    png = plotting.make_candidate_figure(
-        data[0], header.freqs_mhz, header.tsamp_s, t_rel, card,
-        plots_dir / f"{candname}.png")
-
-    result = dict(card)
-    result.update(host=LOCAL_HOSTNAME, dump_files=[str(f) for f in files],
-                  n_samples=int(data.shape[2]), plot=str(png))
+    png, result = render_card(card, files, plots_dir / f"{candname}.png")
     result_json = plots_dir / f"{candname}.json"
     result_json.write_text(json.dumps(result, indent=2))
 

@@ -59,6 +59,8 @@ def _beam_panel(ax, card: dict, fig) -> None:
 
     ax.scatter([0], [beam], marker="s", s=90, facecolors="none",
                edgecolors="red", linewidths=1.2, zorder=5)
+    window_s = float(ctx.get("window_s", 4.0))
+    ax.set_xlim(-window_s, window_s)
     ax.set_ylim(-5, NBEAM_TOTAL + 4)
     ax.set_xlabel("Time - event (s)")
     ax.set_ylabel("Beam")
@@ -129,15 +131,24 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
     ax_dm0.set_ylabel("Power (arb.)")
     ax_dm0.set_title("DM = 0 raw timeseries", fontsize=9)
 
-    vmin, vmax = np.percentile(wf_dd, [2, 98])
+    # Anchor the stretch to the noise so it sits in the dark end of the ramp
+    # and only RFI/pulse climb to green-yellow (the transientX look); a
+    # percentile stretch lets pure noise span the full colormap.
+    med = np.median(wf_dd)
+    sigma = 1.4826 * np.median(np.abs(wf_dd - med))
+    if sigma <= 0:
+        sigma = wf_dd.std() or 1.0
     ax_wf.imshow(wf_dd, aspect="auto", interpolation="nearest",
                  extent=[t_wf[0], t_wf[-1], freqs_mhz[-1], freqs_mhz[0]],
-                 vmin=vmin, vmax=vmax, cmap=WATERFALL_CMAP)
+                 vmin=med - sigma, vmax=med + 7 * sigma, cmap=WATERFALL_CMAP)
     ax_wf.set_ylabel("Freq (MHz)")
     ax_wf.set_xlabel("Time - event (s)")
 
+    # dmt is already in S/N units: pin the floor at 0 so noise stays dark.
     ax_dmt.imshow(dmt_disp, aspect="auto", origin="lower", interpolation="nearest",
-                  extent=[t_wf[0], t_wf[-1], dms[0], dms[-1]], cmap=WATERFALL_CMAP)
+                  extent=[t_wf[0], t_wf[-1], dms[0], dms[-1]],
+                  vmin=0, vmax=max(8.0, np.percentile(dmt_disp, 99.9)),
+                  cmap=WATERFALL_CMAP)
     ax_dmt.plot(0, dm, "o", ms=16, mfc="none", mec="red", mew=1.2)
     ax_dmt.set_ylabel(r"DM (pc cm$^{-3}$)")
     ax_dmt.set_xlabel("Time - event (s)")
