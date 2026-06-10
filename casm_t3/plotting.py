@@ -2,14 +2,14 @@
 
 Layout follows the DSA-110 candidate plotter and transientX conventions:
 
-    dedispersed profile      | DM=0 timestream
-    dedispersed freq-time    | DM-time bowtie
-    beam vs time (T1 members)| per-beam S/N near the event
+    dedispersed profile   | DM=0 raw timeseries
+    dedispersed freq-time | DM-time bowtie
+    beam vs time of T1 context candidates (full width)
 
-The two beam panels are driven by the T1 "context" candidates that
-casm_t2's source watcher embeds in the trigger card: every candidate from
-every beam within a few seconds of the event. RFI lights up many beams at
-unrelated DMs; a real pulse stays compact in beam and DM.
+The beam panel is driven by the T1 "context" candidates that casm_t2's
+source watcher embeds in the trigger card: every candidate from every beam
+within a few seconds of the event. RFI lights up many beams at unrelated
+DMs; a real pulse stays compact in beam and DM.
 """
 
 from __future__ import annotations
@@ -27,57 +27,40 @@ from . import single_pulse
 
 NBEAM_TOTAL = 512
 
+# White-to-dark-blue ramp, matching transientX's candidate plots.
+WATERFALL_CMAP = "Blues"
+
 
 def _block_mean_freqs(freqs_mhz: np.ndarray, ffactor: int) -> np.ndarray:
     n = (freqs_mhz.size // ffactor) * ffactor
     return freqs_mhz[:n].reshape(-1, ffactor).mean(axis=1)
 
 
-def _beam_panels(ax_bt, ax_bs, card: dict, fig) -> None:
-    """Beam-time scatter coloured by DM, and per-beam S/N around the event."""
+def _beam_panel(ax, card: dict, fig) -> None:
+    """Beam-time scatter of T1 context candidates, coloured by DM."""
     ctx = card.get("context") or {}
     members = ctx.get("members") or []
     beam = int(card["beam"])
 
     if not members:
-        for ax in (ax_bt, ax_bs):
-            ax.text(0.5, 0.5, "no context candidates", ha="center", va="center",
-                    transform=ax.transAxes, fontsize=9, color="0.4")
-
-    if members:
+        ax.text(0.5, 0.5, "no context candidates", ha="center", va="center",
+                transform=ax.transAxes, fontsize=9, color="0.4")
+    else:
         m = np.asarray(members, dtype=float)  # columns: dt, beam, dm, snr, width
         dt, mbeam, mdm, msnr = m[:, 0], m[:, 1], m[:, 2], m[:, 3]
 
-        sc = ax_bt.scatter(dt, mbeam, c=mdm, s=4 + 2 * np.clip(msnr - 10, 0, 20),
-                           cmap="plasma", vmin=0, vmax=max(50.0, 1.5 * card["dm"]),
-                           alpha=0.7, linewidths=0)
-        fig.colorbar(sc, ax=ax_bt, pad=0.01, label=r"DM (pc cm$^{-3}$)")
+        sc = ax.scatter(dt, mbeam, c=mdm, s=4 + 2 * np.clip(msnr - 10, 0, 20),
+                        cmap="plasma", vmin=0, vmax=max(50.0, 1.5 * card["dm"]),
+                        alpha=0.7, linewidths=0)
+        fig.colorbar(sc, ax=ax, pad=0.01, label=r"DM (pc cm$^{-3}$)")
         for edge in range(64, NBEAM_TOTAL, 64):
-            ax_bt.axhline(edge, color="0.85", lw=0.4, zorder=0)
+            ax.axhline(edge, color="0.85", lw=0.4, zorder=0)
 
-        # Localization profile: best S/N per beam close to the event time.
-        near = m[np.abs(dt) <= 0.5]
-        if near.size:
-            beams_near = near[:, 1].astype(int)
-            best = {}
-            for b, s in zip(beams_near, near[:, 3]):
-                best[b] = max(best.get(b, 0.0), s)
-            bb = np.array(sorted(best))
-            ss = np.array([best[b] for b in bb])
-            markerline, stemlines, _ = ax_bs.stem(bb, ss)
-            plt.setp(markerline, markersize=3)
-            plt.setp(stemlines, linewidth=0.8)
-            ax_bs.set_xlim(beam - 32.5, beam + 32.5)
-
-    ax_bt.scatter([0], [beam], marker="s", s=90, facecolors="none",
-                  edgecolors="red", linewidths=1.2, zorder=5)
-    ax_bt.set_ylim(-5, NBEAM_TOTAL + 4)
-    ax_bt.set_xlabel("Time - event (s)")
-    ax_bt.set_ylabel("Beam")
-
-    ax_bs.axvline(beam, color="red", lw=0.8, alpha=0.5)
-    ax_bs.set_xlabel("Beam")
-    ax_bs.set_ylabel("max S/N (|t| < 0.5 s)")
+    ax.scatter([0], [beam], marker="s", s=90, facecolors="none",
+               edgecolors="red", linewidths=1.2, zorder=5)
+    ax.set_ylim(-5, NBEAM_TOTAL + 4)
+    ax.set_xlabel("Time - event (s)")
+    ax.set_ylabel("Beam")
 
 
 def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: float,
@@ -92,6 +75,12 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
         first sample of ``data``.
     card : trigger-card dict (candname/source/snr/dm/width/beam/event_utc,
         optional context member list).
+
+    The waterfall and dedispersed profile use per-channel normalised data
+    (the bandpass would otherwise drown the pulse), so the profile y-axis is
+    band-averaged power in those normalised units; a boxcar S/N at the
+    candidate width is annotated on the panel rather than used as the axis.
+    The DM=0 panel is the raw band-averaged timeseries, no normalisation.
     """
     dm, width = float(card["dm"]), int(card["width"])
     norm = single_pulse.normalise(data)
@@ -99,8 +88,17 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
 
     tfactor = max(1, width // 2)
     wf_dd = single_pulse.downsample(dedis, ffactor, tfactor)
-    prof_dd = single_pulse.profile_snr(dedis.mean(axis=0), width)
-    prof_dm0 = single_pulse.profile_snr(norm.mean(axis=0), width)
+    prof_dd = wf_dd.mean(axis=0)
+
+    raw_dm0 = data.mean(axis=0)
+    n = (raw_dm0.size // tfactor) * tfactor
+    raw_dm0 = raw_dm0[:n].reshape(-1, tfactor).mean(axis=1)
+
+    # Matched-boxcar S/N near the event, quoted on the profile panel.
+    prof_full = single_pulse.profile_snr(dedis.mean(axis=0), width)
+    t_full = np.arange(prof_full.size) * tsamp_s - t_rel_event_s
+    near = np.abs(t_full) <= 0.5
+    snr_box = prof_full[near].max() if near.any() else prof_full.max()
 
     small = single_pulse.downsample(norm, ffactor, 1)
     f_small = _block_mean_freqs(freqs_mhz, ffactor)[: small.shape[0]]
@@ -108,39 +106,45 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
     dmt = single_pulse.dm_time(small, f_small, tsamp_s, dms, width)
     dmt_disp = single_pulse.downsample(dmt, 1, tfactor)
 
-    t_prof = np.arange(prof_dd.size) * tsamp_s - t_rel_event_s
     t_wf = (np.arange(wf_dd.shape[1]) * tfactor + tfactor / 2) * tsamp_s - t_rel_event_s
 
-    fig, axes = plt.subplots(3, 2, figsize=(12, 11))
-    (ax_prof, ax_dm0), (ax_wf, ax_dmt), (ax_bt, ax_bs) = axes
+    fig = plt.figure(figsize=(12, 11))
+    gs = fig.add_gridspec(3, 2, height_ratios=(1.0, 1.5, 1.1))
+    ax_prof = fig.add_subplot(gs[0, 0])
+    ax_dm0 = fig.add_subplot(gs[0, 1])
+    ax_wf = fig.add_subplot(gs[1, 0])
+    ax_dmt = fig.add_subplot(gs[1, 1])
+    ax_bt = fig.add_subplot(gs[2, :])
 
-    ax_prof.plot(t_prof, prof_dd, "k-", lw=0.7)
+    ax_prof.plot(t_wf, prof_dd, "k-", lw=0.7)
     ax_prof.axvline(0, color="red", alpha=0.4, lw=1)
-    ax_prof.set_ylabel(r"S/N ($\sigma$)")
+    ax_prof.set_ylabel("Power (arb.)")
     ax_prof.set_title(f"dedispersed at DM={dm:.2f}", fontsize=9)
+    ax_prof.text(0.02, 0.92, f"boxcar S/N = {snr_box:.1f} (w = {width})",
+                 transform=ax_prof.transAxes, fontsize=8, va="top")
 
-    ax_dm0.plot(t_prof, prof_dm0, "-", color="0.3", lw=0.7)
+    ax_dm0.plot(t_wf, raw_dm0, "-", color="0.3", lw=0.7)
     ax_dm0.axvline(0, color="red", alpha=0.4, lw=1)
-    ax_dm0.set_ylabel(r"S/N ($\sigma$)")
-    ax_dm0.set_title("DM = 0 timestream", fontsize=9)
+    ax_dm0.set_ylabel("Power (arb.)")
+    ax_dm0.set_title("DM = 0 raw timeseries", fontsize=9)
 
     vmin, vmax = np.percentile(wf_dd, [2, 98])
     ax_wf.imshow(wf_dd, aspect="auto", interpolation="nearest",
                  extent=[t_wf[0], t_wf[-1], freqs_mhz[-1], freqs_mhz[0]],
-                 vmin=vmin, vmax=vmax, cmap="viridis")
+                 vmin=vmin, vmax=vmax, cmap=WATERFALL_CMAP)
     ax_wf.set_ylabel("Freq (MHz)")
     ax_wf.set_xlabel("Time - event (s)")
 
     ax_dmt.imshow(dmt_disp, aspect="auto", origin="lower", interpolation="nearest",
-                  extent=[t_wf[0], t_wf[-1], dms[0], dms[-1]], cmap="magma")
-    ax_dmt.axhline(dm, color="cyan", lw=0.6, alpha=0.6)
+                  extent=[t_wf[0], t_wf[-1], dms[0], dms[-1]], cmap=WATERFALL_CMAP)
+    ax_dmt.axhline(dm, color="red", lw=0.6, alpha=0.6)
     ax_dmt.set_ylabel(r"DM (pc cm$^{-3}$)")
     ax_dmt.set_xlabel("Time - event (s)")
 
     for ax in (ax_prof, ax_dm0):
         ax.set_xlim(t_wf[0], t_wf[-1])
 
-    _beam_panels(ax_bt, ax_bs, card, fig)
+    _beam_panel(ax_bt, card, fig)
 
     fig.suptitle(
         f"{card['candname']}   {card['source']}   S/N={card['snr']:.1f}   "
