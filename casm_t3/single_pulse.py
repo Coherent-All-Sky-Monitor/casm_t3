@@ -47,3 +47,23 @@ def profile_snr(profile: np.ndarray, width: int) -> np.ndarray:
     mad = np.median(np.abs(smooth - np.median(smooth)))
     sigma = 1.4826 * mad if mad > 0 else smooth.std() or 1.0
     return smooth / sigma
+
+
+def dm_grid(dm: float, ndm: int = 64) -> np.ndarray:
+    """Trial DMs bracketing a candidate DM for the DM-time bowtie."""
+    half = max(0.4 * dm, 15.0)
+    return np.linspace(max(0.0, dm - half), dm + half, ndm)
+
+
+def dm_time(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: float,
+            dms: np.ndarray, width: int) -> np.ndarray:
+    """Band-averaged S/N versus trial DM and time (the bowtie plot).
+
+    ``data`` should already be normalised; downsample it in frequency first
+    if speed matters - channel-averaged dedispersion smearing is well below
+    one sample for the widths we care about.
+    """
+    out = np.empty((len(dms), data.shape[1]), dtype=np.float32)
+    for i, dm in enumerate(dms):
+        out[i] = profile_snr(dedisperse(data, dm, freqs_mhz, tsamp_s).mean(axis=0), width)
+    return out
