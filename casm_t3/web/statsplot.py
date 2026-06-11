@@ -188,8 +188,11 @@ def render(db_path: str | Path, out_png: Path) -> Path:
         et = [datetime.fromisoformat(e[0]) for e in events]
         eb = np.array([e[1] for e in events], dtype=float)
         ed = np.array([e[2] for e in events], dtype=float)
-        sc = ax_beam.scatter(et, eb, c=ed, s=6, cmap="plasma", vmin=0,
-                             vmax=max(50.0, float(np.percentile(ed, 98))),
+        # turbo ends dark red, not plasma's near-invisible yellow, and the
+        # scale runs to the window's true max so high-DM events keep their
+        # own colour instead of saturating at a percentile clip.
+        sc = ax_beam.scatter(et, eb, c=ed, s=6, cmap="turbo", vmin=0,
+                             vmax=max(50.0, float(ed.max())),
                              alpha=0.8, linewidths=0)
         cax = ax_beam.inset_axes((1.008, 0.0, 0.012, 1.0))
         fig.colorbar(sc, cax=cax, label=r"DM (pc cm$^{-3}$)")
