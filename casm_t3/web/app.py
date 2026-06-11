@@ -155,12 +155,15 @@ def stats(request: Request, limit: int = 120):
 
 @app.get("/injections")
 def injections(request: Request, limit: int = 200):
-    rows = q("SELECT * FROM injections ORDER BY id DESC LIMIT ?", (limit,))
+    rows = q("SELECT i.*, c.name AS event_name FROM injections i"
+             " LEFT JOIN clusters c ON c.id = i.matched_cluster"
+             " ORDER BY i.id DESC LIMIT ?", (limit,))
     day = q("SELECT count(*) n, sum(gate_t1) t1, sum(gate_t2) t2,"
             " sum(gate_trigger) tr, count(gate_t1) done FROM injections"
             " WHERE inject_utc > datetime('now', '-1 day')")
+    plots = {p.name for p in CANDIDATES_DIR.iterdir()} if CANDIDATES_DIR.exists() else set()
     return templates.TemplateResponse(request, "injections.html",
-                                      dict(rows=rows, day=day[0]))
+                                      dict(rows=rows, day=day[0], plots=plots))
 
 
 @app.get("/frbs")
