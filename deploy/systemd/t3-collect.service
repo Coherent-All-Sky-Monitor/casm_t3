@@ -1,0 +1,11 @@
+[Unit]
+Description=CASM T3 artifact collector (rsync pull from corr2)
+After=network-online.target
+
+[Service]
+ExecStart=/bin/bash -c 'while true; do rsync -a casm-corr2:/mnt/nvme4/data/casm/t3_artifacts/ /mnt/nvme5/casm_pipeline/candidates/; sleep 20; done'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
