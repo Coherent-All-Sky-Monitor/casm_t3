@@ -54,8 +54,13 @@ def q_write(sql: str, args: tuple = ()) -> None:
 
 
 @app.get("/")
-def index(request: Request, tier: str = "", tag: str = "", limit: int = 200):
+def index(request: Request, tier: str = "", tag: str = "", limit: int = 200,
+          view: str = "triggered"):
     where, args = ["name IS NOT NULL"], []
+    if view != "all":
+        # Default view: only events that reached the trigger stage (a dump
+        # was sent, refused or shadowed) - i.e. things with data behind them.
+        where.append("name IN (SELECT candname FROM triggers)")
     if tier:
         where.append("tier = ?")
         args.append(tier)
@@ -69,7 +74,8 @@ def index(request: Request, tier: str = "", tag: str = "", limit: int = 200):
               q("SELECT name, label FROM labels GROUP BY name HAVING max(id)")}
     plots = {p.name for p in CANDIDATES_DIR.iterdir()} if CANDIDATES_DIR.exists() else set()
     return templates.TemplateResponse(request, "index.html", dict(
-        rows=rows, labels=labels, plots=plots, tier=tier, tag=tag, limit=limit))
+        rows=rows, labels=labels, plots=plots, tier=tier, tag=tag, limit=limit,
+        view=view))
 
 
 @app.get("/event/{name}")
@@ -120,7 +126,12 @@ def label(name: str, label: str = Form(...), notes: str = Form("")):
 
 
 @app.get("/funnel")
-def funnel(request: Request, limit: int = 120):
+def funnel_redirect():
+    return RedirectResponse("/stats")
+
+
+@app.get("/stats")
+def stats(request: Request, limit: int = 120):
     rows = q("SELECT gulp_utc, n_jobs, n_cands, n_clusters, n_stored, n_would,"
              " clustering_ms FROM gulp_stats ORDER BY id DESC LIMIT ?", (limit,))
     day = q("SELECT count(*) gulps, sum(n_cands) cands, sum(n_stored) stored,"

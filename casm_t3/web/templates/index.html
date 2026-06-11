@@ -1,5 +1,8 @@
 {% extends "base.html" %}{% block content %}
 <h2>T2 events ({{ rows|length }} shown)</h2>
+<p class="muted">{% if view == 'all' %}showing ALL stored events (incl. untriggered RFI tiers) —
+<a href="/">show triggered only</a>{% else %}showing events with trigger activity (dump sent / refused / shadow) —
+<a href="/?view=all">show all stored events</a>{% endif %}</p>
 <form class="muted">tier <input name="tier" value="{{ tier }}" size="2">
  tag <input name="tag" value="{{ tag }}" size="12"> limit <input name="limit" value="{{ limit }}" size="5">
  <button>filter</button></form>
