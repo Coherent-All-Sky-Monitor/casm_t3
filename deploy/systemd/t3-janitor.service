@@ -1,0 +1,13 @@
+[Unit]
+Description=CASM T3 dump-directory janitor (corr1 manages both nodes)
+After=network-online.target
+
+[Service]
+ExecStart=/home/casm/software/dev/casm_venvs/casm_offline_env/bin/t3-janitor --max-gb 150 --max-age-days 7 --interval-s 3600
+Restart=always
+RestartSec=30
+StandardOutput=append:/mnt/nvme5/casm_pipeline/logs/t3_janitor.log
+StandardError=inherit
+
+[Install]
+WantedBy=default.target
