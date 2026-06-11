@@ -40,4 +40,4 @@ there), numpy, matplotlib, astropy, fastapi, jinja2, uvicorn.
 
 See `docs/architecture.md` and `docs/operations.md`.
 
-MIT license.
+GPL-3.0 license.
