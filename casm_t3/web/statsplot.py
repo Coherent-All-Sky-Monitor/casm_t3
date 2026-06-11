@@ -218,7 +218,7 @@ def render(db_path: str | Path, out_png: Path) -> Path:
 
 
 def render_injections(db_path: str | Path, out_png: Path) -> Path:
-    """Injected vs recovered S/N for every reconciled injection.
+    """Injected vs recovered S/N for every gate-checked injection.
 
     The 1:1 line is the target; the systematic offset from it is the
     est_snr calibration error (injector predicts from bf_proc stats,
@@ -232,26 +232,28 @@ def render_injections(db_path: str | Path, out_png: Path) -> Path:
     finally:
         conn.close()
 
-    fig, ax = plt.subplots(figsize=(6.5, 6))
+    fig, ax = plt.subplots(figsize=(11, 4.6))
     rec = [(e, r) for e, r, g1, g2, _ in rows if r]
     lost = [e for e, r, g1, g2, _ in rows if not r]
+    n_t2 = sum(1 for _, _, _, g2, _ in rows if g2)
+    top = 1.1 * max([max(e, r) for e, r in rec] + lost + [100])
+    ax.plot([0, top], [0, top], "--", color="0.75", lw=1, label="1:1",
+            zorder=1)
     if rec:
-        ax.loglog([e for e, _ in rec], [r for _, r in rec], "o", ms=6,
-                  color="#393", mfc="none", mew=1.5, label="recovered (T1)")
+        ax.scatter([e for e, _ in rec], [r for _, r in rec], s=55,
+                   facecolors="#2a9d8f", edgecolors="white", linewidths=0.8,
+                   alpha=0.9, label="recovered", zorder=3)
     if lost:
-        # lost shots sit on the x-axis floor so their S/N is still readable
-        floor = min([r for _, r in rec], default=10) * 0.5
-        ax.loglog(lost, [floor] * len(lost), "x", ms=8, mew=1.8, color="red",
-                  label="lost")
-    lims = ax.get_xlim() if rec or lost else (1, 1000)
-    span = (min(lims[0], ax.get_ylim()[0]), max(lims[1], ax.get_ylim()[1]))
-    ax.plot(span, span, "--", color="0.6", lw=0.8, label="1:1")
-    ax.set_xlim(span), ax.set_ylim(span)
+        ax.scatter(lost, [0] * len(lost), s=60, marker="x", color="#e63946",
+                   linewidths=2, label="lost", zorder=3)
+    ax.set_xlim(0, top), ax.set_ylim(0, top)
     ax.set_xlabel("injected S/N (est_snr)")
     ax.set_ylabel("recovered S/N (hella)")
-    ax.set_title(f"{len(rec)} recovered / {len(rows)} reconciled", fontsize=10)
-    ax.grid(alpha=0.25, which="both")
-    ax.legend(fontsize=8)
+    ax.set_title(f"{len(rows)} injected / {n_t2} recovered at T2",
+                 fontsize=11)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    ax.legend(fontsize=9, frameon=False)
     fig.tight_layout()
 
     out_png = Path(out_png)
