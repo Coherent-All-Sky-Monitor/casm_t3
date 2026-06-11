@@ -215,3 +215,48 @@ def render(db_path: str | Path, out_png: Path) -> Path:
     plt.close(fig)
     tmp.replace(out_png)
     return out_png
+
+
+def render_injections(db_path: str | Path, out_png: Path) -> Path:
+    """Injected vs recovered S/N for every reconciled injection.
+
+    The 1:1 line is the target; the systematic offset from it is the
+    est_snr calibration error (injector predicts from bf_proc stats,
+    recovery is hella's matched-filter S/N).
+    """
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=10)
+    try:
+        rows = conn.execute(
+            "SELECT est_snr, rec_snr, gate_t1, gate_t2, fail_reason"
+            " FROM injections WHERE gate_t1 IS NOT NULL").fetchall()
+    finally:
+        conn.close()
+
+    fig, ax = plt.subplots(figsize=(6.5, 6))
+    rec = [(e, r) for e, r, g1, g2, _ in rows if r]
+    lost = [e for e, r, g1, g2, _ in rows if not r]
+    if rec:
+        ax.loglog([e for e, _ in rec], [r for _, r in rec], "o", ms=6,
+                  color="#393", mfc="none", mew=1.5, label="recovered (T1)")
+    if lost:
+        # lost shots sit on the x-axis floor so their S/N is still readable
+        floor = min([r for _, r in rec], default=10) * 0.5
+        ax.loglog(lost, [floor] * len(lost), "x", ms=8, mew=1.8, color="red",
+                  label="lost")
+    lims = ax.get_xlim() if rec or lost else (1, 1000)
+    span = (min(lims[0], ax.get_ylim()[0]), max(lims[1], ax.get_ylim()[1]))
+    ax.plot(span, span, "--", color="0.6", lw=0.8, label="1:1")
+    ax.set_xlim(span), ax.set_ylim(span)
+    ax.set_xlabel("injected S/N (est_snr)")
+    ax.set_ylabel("recovered S/N (hella)")
+    ax.set_title(f"{len(rec)} recovered / {len(rows)} reconciled", fontsize=10)
+    ax.grid(alpha=0.25, which="both")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+
+    out_png = Path(out_png)
+    tmp = out_png.with_suffix(".tmp.png")
+    fig.savefig(tmp, dpi=110)
+    plt.close(fig)
+    tmp.replace(out_png)
+    return out_png

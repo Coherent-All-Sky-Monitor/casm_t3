@@ -3,6 +3,7 @@
 <p class="muted">last 24 h: {{ day['n'] }} injected, {{ day['done'] }} reconciled —
 T1 {{ day['t1'] }}/{{ day['done'] }} · T2 {{ day['t2'] }}/{{ day['done'] }} ·
 trigger-eligible {{ day['tr'] }}/{{ day['done'] }}</p>
+<img src="/injections/snr.png?ts={{ ts }}" style="max-width:520px">
 <table><tr><th>id</th><th>utc</th><th>beam</th><th>dm</th><th>amp</th><th>σms</th>
 <th>est snr</th><th>rec snr</th><th>T1</th><th>T2</th><th>trig</th><th class="l">event / plot</th><th class="l">reason</th></tr>
 {% for r in rows %}<tr><td>{{ r['id'] }}</td><td>{{ r['inject_utc'][:19] }}</td>

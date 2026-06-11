@@ -247,6 +247,7 @@ def stats_plot():
 
 
 INJ_PLOT_DIR = CANDIDATES_DIR / "injections"
+INJ_SNR_PNG = Path(tempfile.gettempdir()) / "casm_t3_inj_snr.png"
 
 
 @app.get("/injections/plot/{file_id}")
@@ -257,8 +258,21 @@ def injection_plot(file_id: str):
     return FileResponse(f)
 
 
+@app.get("/injections/snr.png")
+def injections_snr_plot():
+    if not INJ_SNR_PNG.exists():
+        return RedirectResponse("/injections")
+    return FileResponse(INJ_SNR_PNG, headers={"Cache-Control": "no-cache"})
+
+
 @app.get("/injections")
 def injections(request: Request, limit: int = 200):
+    try:
+        if (not INJ_SNR_PNG.exists()
+                or time.time() - INJ_SNR_PNG.stat().st_mtime > STATS_TTL_S):
+            statsplot.render_injections(DB_PATH, INJ_SNR_PNG)
+    except Exception:  # the page must render even if charting breaks
+        pass
     rows = q("SELECT i.*, c.name AS event_name FROM injections i"
              " LEFT JOIN clusters c ON c.id = i.matched_cluster"
              " ORDER BY i.id DESC LIMIT ?", (limit,))
@@ -268,7 +282,9 @@ def injections(request: Request, limit: int = 200):
     inj_plots = ({p.stem for p in INJ_PLOT_DIR.glob("*.png")}
                  if INJ_PLOT_DIR.exists() else set())
     return templates.TemplateResponse(request, "injections.html",
-                                      dict(rows=rows, day=day[0], inj_plots=inj_plots))
+                                      dict(rows=rows, day=day[0],
+                                           inj_plots=inj_plots,
+                                           ts=int(time.time())))
 
 
 @app.get("/frbs")
