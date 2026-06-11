@@ -24,7 +24,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import colors as mcolors
 
-from . import single_pulse
+from datetime import datetime
+
+from . import single_pulse, skypos
 
 NBEAM_TOTAL = 512
 
@@ -154,10 +156,12 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
     ax_wf.set_xlabel("Time - event (s)")
 
     # dmt is already in S/N units: pin the floor at 0 so noise stays dark.
-    ax_dmt.imshow(dmt_disp, aspect="auto", origin="lower", interpolation="nearest",
-                  extent=[t_wf[0], t_wf[-1], dms[0], dms[-1]],
-                  vmin=0, vmax=max(8.0, np.percentile(dmt_disp, 99.9)),
-                  cmap=WATERFALL_CMAP)
+    im_dmt = ax_dmt.imshow(dmt_disp, aspect="auto", origin="lower", interpolation="nearest",
+                           extent=[t_wf[0], t_wf[-1], dms[0], dms[-1]],
+                           vmin=0, vmax=max(8.0, np.percentile(dmt_disp, 99.9)),
+                           cmap=WATERFALL_CMAP)
+    cax_dmt = ax_dmt.inset_axes((1.015, 0.0, 0.018, 1.0))
+    fig.colorbar(im_dmt, cax=cax_dmt, label=f"boxcar S/N (w = {width})")
     ax_dmt.plot(0, dm, "o", ms=16, mfc="none", mec="red", mew=1.2)
     ax_dmt.set_ylabel(r"DM (pc cm$^{-3}$)")
     ax_dmt.set_xlabel("Time - event (s)")
@@ -168,11 +172,21 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
     _beam_panel(ax_bt, card, fig)
 
     source = "" if card.get("source") == "blind" else f"{card.get('source', '')}   "
-    fig.suptitle(
-        f"{card['candname']}   {source}S/N={card['snr']:.1f}   "
-        f"DM={dm:.2f}   width={width * tsamp_s * 1e3:.1f} ms   "
-        f"beam {card['beam']}   {card['event_utc']}", fontsize=11)
-    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    lines = [
+        f"{card['candname']}   {source}{card['event_utc']}",
+        f"S/N={card['snr']:.1f}   DM={dm:.2f} pc cm$^{{-3}}$   "
+        f"width={width * tsamp_s * 1e3:.1f} ms",
+    ]
+    pos = skypos.beam_radec(int(card["beam"]),
+                            datetime.fromisoformat(card["event_utc"]))
+    if pos:
+        lines.append(
+            f"beam {card['beam']}:  RA {pos['ra_hms']}   Dec {pos['dec_dms']}   "
+            f"(alt {pos['alt_deg']:.1f}\N{DEGREE SIGN}, az {pos['az_deg']:.1f}\N{DEGREE SIGN})")
+    else:
+        lines.append(f"beam {card['beam']}")
+    fig.suptitle("\n".join(lines), fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
 
     out_png = Path(out_png)
     out_png.parent.mkdir(parents=True, exist_ok=True)

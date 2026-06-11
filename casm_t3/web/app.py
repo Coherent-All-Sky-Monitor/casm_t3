@@ -73,10 +73,15 @@ def index(request: Request, tier: str = "", tag: str = "", limit: int = 200,
              f" ORDER BY id DESC LIMIT ?", (*args, limit))
     labels = {r["name"]: r["label"] for r in
               q("SELECT name, label FROM labels GROUP BY name HAVING max(id)")}
+    # Best trigger outcome per event: explains a missing plot at a glance
+    # (suppressed = storm gate / one-dump-per-gulp, refused = dump daemon).
+    actions = {r["candname"]: r["action"] for r in
+               q("SELECT candname, action FROM triggers ORDER BY"
+                 " action = 'triggered', id")}
     plots = {p.name for p in CANDIDATES_DIR.iterdir()} if CANDIDATES_DIR.exists() else set()
     return templates.TemplateResponse(request, "index.html", dict(
-        rows=rows, labels=labels, plots=plots, tier=tier, tag=tag, limit=limit,
-        view=view))
+        rows=rows, labels=labels, plots=plots, actions=actions, tier=tier,
+        tag=tag, limit=limit, view=view))
 
 
 @app.get("/event/{name}")
