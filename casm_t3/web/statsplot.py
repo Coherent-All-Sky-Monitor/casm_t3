@@ -81,21 +81,21 @@ def _fetch(db_path: str | Path):
             " FROM triggers t JOIN clusters c ON c.name = t.candname"
             " WHERE t.action IN ('triggered', 'refused_daemon', 'failed')"
             " AND c.event_utc > ?", (cut,)).fetchall()
-        injections = conn.execute(
-            "SELECT inject_utc, est_snr, gate_t1, gate_t2, gate_trigger"
-            " FROM injections WHERE inject_utc > ?", (cut,)).fetchall()
+        events = conn.execute(
+            "SELECT event_utc, beam, dm FROM clusters"
+            " WHERE name IS NOT NULL AND event_utc > ?", (cut,)).fetchall()
     finally:
         conn.close()
-    return gulps, attempts, injections
+    return gulps, attempts, events
 
 
 def render(db_path: str | Path, out_png: Path) -> Path:
-    gulps, attempts, injections = _fetch(db_path)
+    gulps, attempts, events = _fetch(db_path)
     dumps = [a for a in attempts if a[1] == "triggered"]
     misses = [a for a in attempts if a[1] != "triggered"]
 
     fig, axes = plt.subplots(6, 1, figsize=(11, 13), sharex=True)
-    ax_rate, ax_clus, ax_ev, ax_lag, ax_ms, ax_inj = axes
+    ax_rate, ax_clus, ax_ev, ax_lag, ax_ms, ax_beam = axes
     t0 = day_start()
     now = datetime.now(timezone.utc)
 
@@ -181,36 +181,31 @@ def render(db_path: str | Path, out_png: Path) -> Path:
     ax_lag.set_ylim(0, max([RING_LOOKBACK_S * 1.3]
                            + [a[2] * 1.15 for a in attempts if a[2]]))
 
-    # Injections: one marker per shot at its estimated S/N, coloured by the
-    # deepest gate it cleared once reconciled (~3 min after injection).
-    if injections:
-        groups = {  # (label, colour, marker, y-values, x-values)
-            "recovered (T2)": ("#393", "o"), "lost": ("red", "x"),
-            "pending": ("0.6", "o")}
-        pts = {k: ([], []) for k in groups}
-        for utc, snr, g1, g2, gt in injections:
-            k = ("pending" if g2 is None else
-                 "recovered (T2)" if g2 else "lost")
-            pts[k][0].append(datetime.fromisoformat(utc))
-            pts[k][1].append(snr)
-        for k, (c, m) in groups.items():
-            if pts[k][0]:
-                ax_inj.plot(pts[k][0], pts[k][1], m, ms=6, color=c,
-                            mew=1.5, label=k,
-                            mfc="none" if m == "o" else c)
-        ax_inj.legend(loc="upper left", fontsize=8, ncol=3)
+    # Beam occupancy of stored events, coloured by DM: RFI storms light
+    # up beam blocks at low DM, a transiting source draws a compact track.
+    if events:
+        et = [datetime.fromisoformat(e[0]) for e in events]
+        eb = np.array([e[1] for e in events], dtype=float)
+        ed = np.array([e[2] for e in events], dtype=float)
+        sc = ax_beam.scatter(et, eb, c=ed, s=6, cmap="plasma", vmin=0,
+                             vmax=max(50.0, float(np.percentile(ed, 98))),
+                             alpha=0.8, linewidths=0)
+        cax = ax_beam.inset_axes((1.008, 0.0, 0.012, 1.0))
+        fig.colorbar(sc, cax=cax, label=r"DM (pc cm$^{-3}$)")
+        for edge in range(64, 512, 64):
+            ax_beam.axhline(edge, color="0.85", lw=0.4, zorder=0)
     else:
-        ax_inj.text(0.5, 0.5, "no injections in window", ha="center",
-                    va="center", transform=ax_inj.transAxes, color="0.4",
-                    fontsize=9)
-    ax_inj.set_ylabel("injected S/N")
-    ax_inj.set_ylim(bottom=0)
+        ax_beam.text(0.5, 0.5, "no stored events in window", ha="center",
+                     va="center", transform=ax_beam.transAxes, color="0.4",
+                     fontsize=9)
+    ax_beam.set_ylabel("beam (stored events)")
+    ax_beam.set_ylim(-5, 516)
 
     for ax in axes:
         ax.grid(alpha=0.25)
-    ax_inj.set_xlim(t0, now)
-    ax_inj.set_xlabel("OVRO local time (America/Los_Angeles)")
-    ax_inj.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M", tz=OVRO_TZ))
+    ax_beam.set_xlim(t0, now)
+    ax_beam.set_xlabel("OVRO local time (America/Los_Angeles)")
+    ax_beam.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M", tz=OVRO_TZ))
     fig.tight_layout()
 
     out_png = Path(out_png)

@@ -28,7 +28,7 @@ from fastapi.templating import Jinja2Templates
 
 from casm_t2 import db as t2db
 
-from . import statsplot
+from . import nowpanel, statsplot
 
 DB_PATH = t2db.DEFAULT_PATH
 CANDIDATES_DIR = Path("/mnt/nvme5/casm_pipeline/candidates")
@@ -55,6 +55,26 @@ def q_write(sql: str, args: tuple = ()) -> None:
             conn.execute(sql, args)
     finally:
         conn.close()
+
+
+def held_reason(tier: str, tags: str, dm: float) -> str:
+    """Why a stored event never reached a dump attempt (no triggers row).
+
+    Mirrors t2d._wants_trigger: tag exclusions first, then the tier/DM
+    gate (tiers are S/N bands: A >= 30, B >= 15, C >= 12; blind triggers
+    need tier A/B and DM >= the 20 pc/cc floor).
+    """
+    if "injection" in tags:
+        return "injection: never dumped (policy)"
+    if "veto" in tags:
+        return "vetoed beam"
+    if "rfi_wide" in tags:
+        return "RFI: too many beams"
+    if tier not in ("A", "B"):
+        return "S/N below tier B (15)"
+    if dm < 20.0:
+        return "DM below 20 floor"
+    return "held by filters"
 
 
 def friendly_outcome(action: str, detail: str) -> str:
@@ -106,9 +126,11 @@ def index(request: Request, tier: str = "", tag: str = "", limit: int = 200,
                for r in q("SELECT candname, action, detail FROM triggers"
                           " ORDER BY action = 'triggered', id")}
     plots = {p.name for p in CANDIDATES_DIR.iterdir()} if CANDIDATES_DIR.exists() else set()
+    held = {r["name"]: held_reason(r["tier"], r["tags"], r["dm"])
+            for r in rows if r["name"] not in actions}
     return templates.TemplateResponse(request, "index.html", dict(
-        rows=rows, labels=labels, plots=plots, actions=actions, tier=tier,
-        tag=tag, limit=limit, view=view))
+        rows=rows, labels=labels, plots=plots, actions=actions, held=held,
+        tier=tier, tag=tag, limit=limit, view=view))
 
 
 @app.get("/event/{name}")
@@ -136,8 +158,12 @@ def event(request: Request, name: str):
         data_status = "raw dump deleted by janitor"
     elif any(t["action"] in ("triggered", "partial") for t in triggers):
         data_status = "unknown (pre-tracking dump)"
+    elif triggers:
+        last = triggers[-1]
+        data_status = f"no dump — {friendly_outcome(last['action'], last['detail'])}"
     else:
-        data_status = "no dump (trigger refused/failed)"
+        e = rows[0]
+        data_status = f"no dump attempt — {held_reason(e['tier'], e['tags'], e['dm'])}"
     return templates.TemplateResponse(request, "event.html", dict(
         ev=dict(rows[0]), triggers=triggers, labels=labels, pngs=pngs,
         meta=json.dumps(meta, indent=2), label_choices=LABELS,
@@ -197,13 +223,15 @@ def stats(request: Request, limit: int = 60):
             statsplot.render(DB_PATH, STATS_PNG)
     except Exception:  # the page must render even if charting breaks
         pass
+    now = nowpanel.snapshot()
     rows = q("SELECT gulp_utc, n_jobs, n_cands, n_clusters, n_stored, n_would,"
              " clustering_ms FROM gulp_stats ORDER BY id DESC LIMIT ?", (limit,))
     day0 = statsplot.day_start().astimezone(statsplot.OVRO_TZ)
     return templates.TemplateResponse(request, "funnel.html", dict(
         rows=rows, hour=_window_stats(statsplot.utc_cut(1)),
         win=_window_stats(statsplot.day_cut()),
-        day_label=day0.strftime("%H:%M local %b %d"), ts=int(time.time())))
+        day_label=day0.strftime("%H:%M local %b %d"), now=now,
+        ts=int(time.time())))
 
 
 @app.get("/stats/plot.png")

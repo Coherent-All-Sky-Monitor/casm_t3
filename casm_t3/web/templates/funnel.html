@@ -1,6 +1,41 @@
 {% extends "base.html" %}{% block head %}<meta http-equiv="refresh" content="60">{% endblock %}
 {% block content %}
 <h2>Pipeline stats — T1 → T2</h2>
+{% if now %}
+<table style="margin-top:0.4em">
+<tr><th>OVRO local</th><th>UTC</th><th>LST (= RA on meridian)</th></tr>
+<tr><td id="clk-local"></td><td id="clk-utc"></td><td id="clk-lst"></td></tr>
+</table>
+<table>
+<tr><th class="l">source</th><th>alt °</th><th>az °</th><th>dec °</th><th>transit</th></tr>
+{% for s in now['sources'] %}<tr>
+ <td class="l">{{ s['name'] }} {% if s['alt'] > 0 %}<span class="tag lbl-frb">up</span>{% endif %}</td>
+ <td>{{ '%.1f' % s['alt'] }}</td><td>{{ '%.1f' % s['az'] }}</td>
+ <td>{{ '%.1f' % s['dec'] }}</td><td>{{ s['transit'] }}</td>
+</tr>{% endfor %}</table>
+<script>
+// Clocks tick client-side between page refreshes; LST advances at the
+// sidereal rate from the server-computed anchor.
+const anchorMs = {{ now['epoch_ms'] }}, lst0 = {{ now['lst_h'] }};
+const pad = n => String(n).padStart(2, "0");
+function hms(h) {
+  h = ((h % 24) + 24) % 24;
+  const H = Math.floor(h), M = Math.floor((h - H) * 60),
+        S = Math.floor(((h - H) * 60 - M) * 60);
+  return pad(H) + ":" + pad(M) + ":" + pad(S);
+}
+function tick() {
+  const d = new Date();
+  document.getElementById("clk-utc").textContent =
+    d.toISOString().slice(0, 19).replace("T", " ");
+  document.getElementById("clk-local").textContent = d.toLocaleString("en-CA",
+    {timeZone: "America/Los_Angeles", hour12: false}).replace(",", "");
+  document.getElementById("clk-lst").textContent =
+    hms(lst0 + (d.getTime() - anchorMs) / 1000 * 1.00273790935 / 3600);
+}
+tick(); setInterval(tick, 1000);
+</script>
+{% endif %}
 <p class="muted">last 1 h: {{ hour['cands_s'] }} T1 cands/s · {{ hour['stored'] or 0 }} stored ·
 {{ hour['would'] or 0 }} trigger-worthy —
 since {{ day_label }}: {{ win['cands'] or 0 }} T1 cands ({{ win['cands_s'] }}/s) ·
