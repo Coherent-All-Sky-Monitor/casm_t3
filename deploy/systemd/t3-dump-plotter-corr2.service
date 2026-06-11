@@ -3,7 +3,7 @@ Description=CASM T3 dump plotter (corr2)
 After=network-online.target
 
 [Service]
-ExecStart=/home/casm/software/dev/casm_venvs/casm_offline_env/bin/t3-dump-plotter --archive-host casm-corr2 --archive-dir /mnt/nvme4/data/casm/t3_artifacts --log-file /home/casm/t3_dump_plotter_corr2.log
+ExecStart=/home/casm/software/dev/casm_venvs/casm_offline_env/bin/t3-dump-plotter --archive-host casm-corr2 --archive-dir /mnt/nvme4/data/casm/t3_artifacts --log-file /home/casm/t3_dump_plotter_corr2.log --delete-dumps
 Restart=always
 RestartSec=5
 StandardOutput=journal

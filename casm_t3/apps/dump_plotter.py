@@ -114,6 +114,13 @@ def process_card(card_path: Path, args: argparse.Namespace) -> None:
 
     plots_dir = Path(args.plots_dir)
     png, result = render_card(card, files, plots_dir / f"{candname}.png")
+    # Plot-then-delete keeps the dump budget disk-neutral: once the figure
+    # and result JSON are archived, the bulk .dada has served its purpose.
+    # Known-source dumps are kept for folding (the janitor ages them out),
+    # and a failed render never reaches this point, so its dump survives.
+    delete_after = (args.delete_dumps
+                    and not str(card.get("trigger_reason", "")).startswith("known_source"))
+    result["data_available"] = not delete_after
     result_json = plots_dir / f"{candname}.json"
     result_json.write_text(json.dumps(result, indent=2))
 
@@ -124,6 +131,15 @@ def process_card(card_path: Path, args: argparse.Namespace) -> None:
         f"S/N {card['snr']:.1f}, DM {card['dm']:.2f}, beam {card['beam']}, "
         f"width {card['width']} samp ({LOCAL_HOSTNAME})",
         channel=args.slack_channel)
+
+    if delete_after:
+        for f in files:
+            try:
+                size_gb = f.stat().st_size / 1e9
+                f.unlink()
+                logger.info("deleted dump %s (%.1f GB) after plotting", f.name, size_gb)
+            except OSError as exc:
+                logger.warning("could not delete %s: %s", f, exc)
 
 
 def main() -> None:
@@ -137,6 +153,8 @@ def main() -> None:
     p.add_argument("--poll", type=float, default=2.0)
     p.add_argument("--log-file", default=None,
                    help="also log to this file (journald always gets a copy)")
+    p.add_argument("--delete-dumps", action="store_true",
+                   help="delete .dada files after a successful plot (known-source dumps kept)")
     args = p.parse_args()
 
     logsetup.setup(args.log_file)

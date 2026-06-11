@@ -1,7 +1,8 @@
 {% extends "base.html" %}{% block content %}
 <h2>{{ ev['name'] }} <span class="muted">tier {{ ev['tier'] }} · {{ ev['tags'] or 'no tags' }}</span></h2>
 <p>{{ ev['event_utc'] }} · S/N {{ '%.1f' % ev['snr'] }} · DM {{ '%.2f' % ev['dm'] }} ·
-width {{ ev['width'] }} · beam {{ ev['beam'] }} ({{ ev['n_beams'] }} beams, {{ ev['n_members'] }} trials)</p>
+width {{ ev['width'] }} · beam {{ ev['beam'] }} ({{ ev['n_beams'] }} beams, {{ ev['n_members'] }} trials)
+· <b>{{ data_status }}</b></p>
 <form method="post" action="/event/{{ ev['name'] }}/label">
  {% for c in label_choices %}<button name="label" value="{{ c }}">{{ c }}</button> {% endfor %}
  notes <input name="notes" size="40">

@@ -95,9 +95,20 @@ def event(request: Request, name: str):
             meta = json.loads(j.read_text())
             meta.get("context", {}).pop("members", None)  # too big for a page
             break
+    if meta.get("data_available") is True:
+        data_status = "raw dump on disk"
+    elif meta.get("data_available") is False:
+        data_status = "raw dump deleted after plotting"
+    elif any(t["cleaned_utc"] for t in triggers):
+        data_status = "raw dump deleted by janitor"
+    elif any(t["action"] in ("triggered", "partial") for t in triggers):
+        data_status = "unknown (pre-tracking dump)"
+    else:
+        data_status = "no dump (trigger refused/failed)"
     return templates.TemplateResponse(request, "event.html", dict(
         ev=dict(rows[0]), triggers=triggers, labels=labels, pngs=pngs,
-        meta=json.dumps(meta, indent=2), label_choices=LABELS))
+        meta=json.dumps(meta, indent=2), label_choices=LABELS,
+        data_status=data_status))
 
 
 @app.get("/event/{name}/plot/{fname}")
