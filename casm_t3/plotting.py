@@ -122,6 +122,19 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
 
     t_wf = (np.arange(wf_dd.shape[1]) * tfactor + tfactor / 2) * tsamp_s - t_rel_event_s
 
+    # Fixed framing: every candidate gets the same window around the pulse
+    # instead of wherever it happened to fall in the dump, so plots are
+    # directly comparable. The dedispersed panels need ~a second of context
+    # (more for wide pulses); the DM-time bowtie must also fit its wings,
+    # which extend in time as the trial-DM mismatch grows. The DM=0 panel
+    # keeps the full dump span — its job is RFI context.
+    half_prof = max(1.0, 30 * width * tsamp_s)
+    wing_s = 4.148808e3 * 0.5 * (dms[-1] - dms[0]) * (
+        freqs_mhz.min() ** -2 - freqs_mhz.max() ** -2)
+    half_dmt = max(half_prof, 0.75 * wing_s)
+    xlim_prof = (max(-half_prof, t_wf[0]), min(half_prof, t_wf[-1]))
+    xlim_dmt = (max(-half_dmt, t_wf[0]), min(half_dmt, t_wf[-1]))
+
     fig = plt.figure(figsize=(12, 11))
     gs = fig.add_gridspec(3, 2, height_ratios=(1.0, 1.5, 1.1))
     ax_prof = fig.add_subplot(gs[0, 0])
@@ -152,6 +165,7 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
     ax_wf.imshow(wf_dd, aspect="auto", interpolation="nearest",
                  extent=[t_wf[0], t_wf[-1], freqs_mhz[-1], freqs_mhz[0]],
                  vmin=med - sigma, vmax=med + 7 * sigma, cmap=WATERFALL_CMAP)
+    ax_wf.set_xlim(xlim_prof)
     ax_wf.set_ylabel("Freq (MHz)")
     ax_wf.set_xlabel("Time - event (s)")
 
@@ -163,11 +177,12 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
     cax_dmt = ax_dmt.inset_axes((1.015, 0.0, 0.018, 1.0))
     fig.colorbar(im_dmt, cax=cax_dmt, label=f"boxcar S/N (w = {width})")
     ax_dmt.plot(0, dm, "o", ms=16, mfc="none", mec="red", mew=1.2)
+    ax_dmt.set_xlim(xlim_dmt)
     ax_dmt.set_ylabel(r"DM (pc cm$^{-3}$)")
     ax_dmt.set_xlabel("Time - event (s)")
 
-    for ax in (ax_prof, ax_dm0):
-        ax.set_xlim(t_wf[0], t_wf[-1])
+    ax_prof.set_xlim(xlim_prof)
+    ax_dm0.set_xlim(t_wf[0], t_wf[-1])
 
     _beam_panel(ax_bt, card, fig)
 
