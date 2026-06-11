@@ -223,9 +223,10 @@ def render_injections(db_path: str | Path, out_png: Path) -> Path:
 
     On the left the 1:1 line is the target; the offset from it is the
     est_snr calibration error (injector predicts from bf_proc stats,
-    recovery is hella's matched-filter S/N). On the right injections are
-    binned by injected width; marker colour is the bin's median DM and
-    size grows with the number of shots in the bin.
+    recovery is hella's matched-filter S/N). On the right every injection
+    is one point at its DM, at 1 if T2 recovered it and 0 if not, coloured
+    by injected pulse width -- the S/N threshold edge will appear as the
+    band where points start dropping to 0.
     """
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=10)
     try:
@@ -251,7 +252,7 @@ def render_injections(db_path: str | Path, out_png: Path) -> Path:
                    linewidths=2, label="lost", zorder=3)
     ax.set_xlim(0, top), ax.set_ylim(0, top)
     ax.set_xlabel("injected S/N")
-    ax.set_ylabel("recovered S/N")
+    ax.set_ylabel("recovered S/N (hella)")
     ax.set_title(f"{len(rows)} injected / "
                  f"{sum(1 for _, _, g2, _, _ in rows if g2)} recovered at T2",
                  fontsize=11)
@@ -261,29 +262,18 @@ def render_injections(db_path: str | Path, out_png: Path) -> Path:
         w = np.array([r[3] for r in rows], dtype=float)
         d = np.array([r[4] for r in rows], dtype=float)
         ok = np.array([1.0 if r[2] else 0.0 for r in rows])
-        lo = 2 ** np.floor(np.log2(max(w.min(), 0.125)))
-        edges = lo * 2.0 ** np.arange(0, np.ceil(np.log2(w.max() / lo)) + 1.01)
-        xs, fr, dm_med, cnt = [], [], [], []
-        for a, b in zip(edges[:-1], edges[1:]):
-            sel = (w >= a) & (w < b)
-            if sel.any():
-                xs.append(np.sqrt(a * b))
-                fr.append(ok[sel].mean())
-                dm_med.append(np.median(d[sel]))
-                cnt.append(sel.sum())
-        sc = ax_w.scatter(xs, fr, c=dm_med, s=40 + 25 * np.array(cnt),
-                          cmap="plasma", vmin=0, edgecolors="white",
-                          linewidths=0.8, zorder=3)
-        fig.colorbar(sc, ax=ax_w, pad=0.02, label=r"median DM (pc cm$^{-3}$)")
-        ax_w.set_xscale("log")
-        ax_w.set_xlim(edges[0] * 0.8, edges[-1] * 1.2)
+        sc = ax_w.scatter(d, ok, c=w, s=55, cmap="plasma",
+                          vmin=0, vmax=max(10.0, w.max()),
+                          edgecolors="white", linewidths=0.8, zorder=3)
+        fig.colorbar(sc, ax=ax_w, pad=0.02, label="pulse width (ms)")
+        ax_w.set_xlim(0, max(d.max() * 1.1, 100))
     else:
-        ax_w.text(0.5, 0.5, "no reconciled injections", ha="center",
+        ax_w.text(0.5, 0.5, "no gate-checked injections", ha="center",
                   va="center", transform=ax_w.transAxes, color="0.4")
     ax_w.set_ylim(-0.05, 1.05)
-    ax_w.set_xlabel("injected pulse width (ms)")
+    ax_w.set_xlabel(r"injected DM (pc cm$^{-3}$)")
     ax_w.set_ylabel("recovery fraction (T2)")
-    ax_w.set_title("recovery vs width", fontsize=11)
+    ax_w.set_title("recovery vs DM", fontsize=11)
 
     for a in (ax, ax_w):
         for side in ("top", "right"):
