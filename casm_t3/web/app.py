@@ -65,7 +65,7 @@ def friendly_outcome(action: str, detail: str) -> str:
     if tail == "daily_cap":
         return "cap: daily max"
     if "Bad command" in tail:
-        return "too slow: buffer gone"
+        return "missed gulp window (T2 too slow for ring)"
     if tail.startswith("disk"):
         return "low disk"
     if action == "shadow":
@@ -78,10 +78,12 @@ def index(request: Request, tier: str = "", tag: str = "", limit: int = 200,
           view: str = "candidates"):
     where, args = ["name IS NOT NULL"], []
     if view != "all":
-        # Default: candidates (events that reached the trigger stage). Under
-        # the everything-gets-plotted policy this is also the plot list; the
-        # plot column flags the rare failed render or refused dump.
-        where.append("name IN (SELECT candname FROM triggers)")
+        # Default: dump attempts only — events T2 shortlisted AND tried to
+        # dump. Each has a plot or a red miss reason. Storm-gate and 60 s
+        # suppressions live in the all-stored-events view.
+        where.append("name IN (SELECT candname FROM triggers WHERE"
+                     " action IN ('triggered', 'refused_daemon', 'failed')"
+                     " OR (action = 'refused' AND detail LIKE '%disk%'))")
     if tier:
         where.append("tier = ?")
         args.append(tier)

@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% block content %}
 <h2>T2 events ({{ rows|length }} shown)</h2>
-<p class="muted">{% if view == 'all' %}showing every stored T2 event —
-<a href="/">show candidates only</a>{% else %}showing candidates (triggered events; all get plots) —
+<p class="muted">{% if view == 'all' %}showing every stored T2 event (incl. storm-gate suppressions) —
+<a href="/">show dump attempts only</a>{% else %}showing T2 dump attempts: each has a plot, or a red reason for the miss —
 <a href="/?view=all">show every stored event</a>{% endif %}</p>
 <form class="muted">tier <input name="tier" value="{{ tier }}" size="2">
  tag <input name="tag" value="{{ tag }}" size="12"> limit <input name="limit" value="{{ limit }}" size="5">
@@ -15,7 +15,7 @@
  <td class="l">{% for t in r['tags'].split(',') if t %}<span class="tag">{{ t }}</span>{% endfor %}</td>
  <td>{{ '%.1f' % r['snr'] }}</td><td>{{ '%.1f' % r['dm'] }}</td><td>{{ r['width'] }}</td>
  <td>{{ r['beam'] }}</td><td>{{ r['n_beams'] }}</td><td>{{ r['n_members'] }}</td>
- <td class="l" title="{{ actions.get(r['name'], ('',''))[1] }}">{{ actions.get(r['name'], ('',''))[0] }}</td>
+ <td class="l" title="{{ actions.get(r['name'], ('',''))[1] }}">{% set a = actions.get(r['name'], ('',''))[0] %}{% if a and a != 'dumped' %}<span class="miss">{{ a }}</span>{% else %}{{ a }}{% endif %}</td>
  <td>{{ '+' if r['name'] in plots else '-' }}</td>
 </tr>{% endfor %}</table>
 {% endblock %}
