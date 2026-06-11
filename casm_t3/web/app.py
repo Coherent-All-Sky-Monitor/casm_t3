@@ -174,16 +174,15 @@ def funnel_redirect():
     return RedirectResponse("/stats")
 
 
-STATS_HOURS = 24
 STATS_PNG = Path(tempfile.gettempdir()) / "casm_t3_stats.png"
 STATS_TTL_S = 60
 
 
-def _window_stats(hours: float) -> dict:
+def _window_stats(cut: str) -> dict:
     r = q("SELECT count(*) gulps, sum(n_cands) cands, sum(n_clusters) clusters,"
           " sum(n_stored) stored, sum(n_would) would,"
           " round(avg(clustering_ms),1) ms FROM gulp_stats WHERE gulp_utc > ?",
-          (statsplot.utc_cut(hours),))[0]
+          (cut,))[0]
     d = dict(r)
     span_s = (r["gulps"] or 0) * statsplot.GULP_S
     d["cands_s"] = round((r["cands"] or 0) / span_s, 1) if span_s else 0.0
@@ -191,18 +190,20 @@ def _window_stats(hours: float) -> dict:
 
 
 @app.get("/stats")
-def stats(request: Request, limit: int = 60, hours: float = STATS_HOURS):
+def stats(request: Request, limit: int = 60):
     try:
         if (not STATS_PNG.exists()
                 or time.time() - STATS_PNG.stat().st_mtime > STATS_TTL_S):
-            statsplot.render(DB_PATH, STATS_PNG, hours=hours)
+            statsplot.render(DB_PATH, STATS_PNG)
     except Exception:  # the page must render even if charting breaks
         pass
     rows = q("SELECT gulp_utc, n_jobs, n_cands, n_clusters, n_stored, n_would,"
              " clustering_ms FROM gulp_stats ORDER BY id DESC LIMIT ?", (limit,))
+    day0 = statsplot.day_start().astimezone(statsplot.OVRO_TZ)
     return templates.TemplateResponse(request, "funnel.html", dict(
-        rows=rows, hour=_window_stats(1), win=_window_stats(hours),
-        hours=hours, ts=int(time.time())))
+        rows=rows, hour=_window_stats(statsplot.utc_cut(1)),
+        win=_window_stats(statsplot.day_cut()),
+        day_label=day0.strftime("%H:%M local %b %d"), ts=int(time.time())))
 
 
 @app.get("/stats/plot.png")
