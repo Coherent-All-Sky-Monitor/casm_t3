@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from casm_t2 import db as t2db
+from casm_t2 import logsetup
 from casm_t2 import timing
 
 logger = logging.getLogger("t3.janitor")
@@ -168,10 +169,10 @@ def main() -> None:
     p.add_argument("--interval-s", type=float, default=3600.0)
     p.add_argument("--once", action="store_true")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--log-file", default=None)
     args = p.parse_args()
 
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logsetup.setup(args.log_file)
     import socket
     local_host = socket.gethostname().split(".")[0]
     conn = t2db.connect(args.db)

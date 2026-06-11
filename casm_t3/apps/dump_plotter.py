@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 from casm_t2 import beams as t2_beams
+from casm_t2 import logsetup
 
 from casm_t3 import alerts, dump_reader, plotting
 
@@ -134,10 +135,11 @@ def main() -> None:
     p.add_argument("--slack-channel", default="casm-alerts")
     p.add_argument("--dump-timeout", type=float, default=180.0)
     p.add_argument("--poll", type=float, default=2.0)
+    p.add_argument("--log-file", default=None,
+                   help="also log to this file (journald always gets a copy)")
     args = p.parse_args()
 
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logsetup.setup(args.log_file)
     spool = Path(args.spool)
     spool.mkdir(parents=True, exist_ok=True)
     Path(args.plots_dir).mkdir(parents=True, exist_ok=True)

@@ -3,11 +3,11 @@ Description=CASM T3 dump plotter (corr1)
 After=network-online.target
 
 [Service]
-ExecStart=/home/casm/software/dev/casm_venvs/casm_offline_env/bin/t3-dump-plotter --plots-dir /mnt/nvme5/casm_pipeline/t3_plots
+ExecStart=/home/casm/software/dev/casm_venvs/casm_offline_env/bin/t3-dump-plotter --plots-dir /mnt/nvme5/casm_pipeline/t3_plots --log-file /mnt/nvme5/casm_pipeline/logs/t3_dump_plotter.log
 Restart=always
 RestartSec=5
-StandardOutput=append:/mnt/nvme5/casm_pipeline/logs/t3_dump_plotter.log
-StandardError=inherit
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=default.target
