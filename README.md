@@ -1,53 +1,43 @@
 # casm_t3
 
-T3 stage of the CASM fast-transient search: turns the beam intensity dumps
-triggered by [casm_t2](../casm_t2) into candidate diagnostic plots, serves
-the monitoring web UI, and keeps the dump disks within quota.
+T3 stage of the CASM fast-transient search: turns the beam dumps that
+casm_t2 triggers into candidate plots, serves the monitoring web UI, and
+keeps the dump disks within quota.
 
-Pipeline position:
+The design constraint that shapes everything here is that bulk data never
+crosses the network. One plotter instance runs on each backend node and
+only reads that node's dumps; the only things that travel are small PNG
+and JSON artifacts. The web app reads the T2 SQLite database read-only —
+human labels are its single write path.
 
-    T1  casm-hella GPU single-pulse search
-    T2  casm_t2: clustering, filtering, trigger policy
-    T3  this repo: plotting, web monitor, disk janitor
+## What's here
 
-## What it does
+`dump_reader` parses casm_cand_dump `.dada` files (4096-byte ASCII
+header, float16, 64 beams x 3072 channels). `single_pulse` has the
+numerics: per-channel normalisation, incoherent dedispersion, boxcar S/N,
+a DM-time transform in true S/N units. `plotting` renders the five-panel
+candidate figure (dedispersed profile, raw DM=0 timeseries, waterfall,
+DM-time bowtie, beam-vs-time context scatter), framed so the pulse always
+sits at t=0 and plots are comparable across events. `skypos` converts
+beam number plus event time to RA/Dec; the pointing table is an 8 KB JSON
+extracted from the beamforming weights so offline nodes don't need the
+400 MB HDF5.
 
-- Reads casm_cand_dump `.dada` beam dumps (float16, 64 beams x 3072
-  channels) and renders a five-panel candidate figure: dedispersed profile,
-  raw DM=0 timeseries, dedispersed waterfall, DM-time bowtie, and a
-  beam-vs-time scatter of T1 context candidates. Titles carry the beam's
-  RA/Dec at the event time.
-- One plotter instance runs per backend node and only touches that node's
-  local dumps; only small PNG/JSON artifacts cross the network.
-- Serves a server-rendered FastAPI monitor: events table with per-event
-  trigger/miss reasons, event pages with labelling (an `frb` label promotes
-  into the FRB catalog), live pipeline stats, injection recovery, and an
-  "now at OVRO" clock/source panel.
-- A janitor enforces dump-directory quotas and ages out plotted dumps,
-  never touching events labelled frb/pulsar.
+The daemons: `t3-dump-plotter` (polls the T2 spool, waits for the dump to
+settle, plots, ships artifacts), `t3-web` (FastAPI monitor on :8050 —
+events with per-event trigger/miss reasons, labelling, day stats, an
+OVRO clock/source panel, injection recovery), `t3-janitor` (size and age
+quotas on the dump trees; never deletes anything labelled frb or pulsar),
+and `t3-replot` for offline re-rendering — use that for all plotter
+iteration, never card requeue.
 
 ## Install
 
-    python -m venv env && source env/bin/activate
     pip install -e .
 
-Python >= 3.10. Depends on casm_t2 (schema, timing, and beam maps are
-owned there), numpy, matplotlib, astropy, fastapi, jinja2, uvicorn.
+Python >= 3.10. Depends on casm_t2 (schema, timing, and beam maps live
+there), numpy, matplotlib, astropy, fastapi, jinja2, uvicorn.
 
-## Run
+See `docs/architecture.md` and `docs/operations.md`.
 
-    t3-dump-plotter <args>      # per-node dump -> plot daemon
-    t3-web                      # monitor UI on :8050
-    t3-janitor                  # disk quota sweep
-    t3-replot card.json.done    # offline re-render of one candidate
-
-## Documentation
-
-- [docs/architecture.md](docs/architecture.md) — dump format, plotting
-  pipeline, sky positions, web app.
-- [docs/operations.md](docs/operations.md) — per-node deployment, runbooks,
-  janitor rules.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+MIT license.
