@@ -14,6 +14,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import matplotlib
 
@@ -24,6 +25,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 GULP_S = 8192 * 1.048576e-3  # gulp duration: 8192 samples at 1.048576 ms
+
+# Chart axis only -- the DB and all pipeline timestamps stay UTC. zoneinfo
+# applies the real PST/PDT rules, so the axis is daylight-saving safe.
+OVRO_TZ = ZoneInfo("America/Los_Angeles")
 
 
 def utc_cut(hours: float) -> str:
@@ -53,7 +58,7 @@ def _fetch(db_path: str | Path, hours: float):
     return gulps, dumps
 
 
-def render(db_path: str | Path, out_png: Path, hours: float = 4) -> Path:
+def render(db_path: str | Path, out_png: Path, hours: float = 24) -> Path:
     gulps, dumps = _fetch(db_path, hours)
 
     fig, axes = plt.subplots(4, 1, figsize=(11, 9), sharex=True)
@@ -64,7 +69,7 @@ def render(db_path: str | Path, out_png: Path, hours: float = 4) -> Path:
         cands, clusters, stored, would, ms = (
             np.array([g[i] for g in gulps], dtype=float) for i in range(1, 6))
 
-        bw = max(60.0, hours * 3600 / 240)  # 1 min bins at the 4 h default
+        bw = max(60.0, hours * 3600 / 240)  # 6 min bins at the 24 h default
         edges = np.arange(t.min(), t.max() + bw, bw)
         idx = np.clip(np.digitize(t, edges) - 1, 0, len(edges) - 2)
         n = np.bincount(idx, minlength=len(edges) - 1).astype(float)
@@ -89,12 +94,12 @@ def render(db_path: str | Path, out_png: Path, hours: float = 4) -> Path:
         ax_ev.plot(centers, per_bin(stored) / (nn * GULP_S) * 3600, "-",
                    color="0.4", lw=1, label="stored / h")
         ax_ev.plot(centers, per_bin(would) / (nn * GULP_S) * 3600, "-",
-                   color="#c60", lw=1, label="trigger-worthy / h")
+                   color="#06c", lw=1, label="trigger-worthy / h")
         for d in dumps:
-            ax_ev.axvline(datetime.fromisoformat(d), color="red", alpha=0.6,
-                          lw=1)
+            ax_ev.axvline(datetime.fromisoformat(d), color="red", alpha=0.7,
+                          lw=1.2)
         if dumps:  # one labelled proxy line so the legend mentions dumps
-            ax_ev.plot([], [], color="red", lw=1, label="dump fired")
+            ax_ev.plot([], [], color="red", lw=1.2, label="dump fired")
         ax_ev.legend(loc="upper left", fontsize=8, ncol=3)
         ax_ev.set_ylabel("events / h")
         ax_ev.set_ylim(bottom=0)
@@ -120,8 +125,8 @@ def render(db_path: str | Path, out_png: Path, hours: float = 4) -> Path:
 
     for ax in axes:
         ax.grid(alpha=0.25)
-    ax_ms.set_xlabel("UTC")
-    ax_ms.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M", tz=timezone.utc))
+    ax_ms.set_xlabel("OVRO local time (America/Los_Angeles)")
+    ax_ms.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M", tz=OVRO_TZ))
     fig.tight_layout()
 
     out_png = Path(out_png)

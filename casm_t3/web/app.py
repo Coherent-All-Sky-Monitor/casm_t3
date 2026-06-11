@@ -174,7 +174,7 @@ def funnel_redirect():
     return RedirectResponse("/stats")
 
 
-STATS_HOURS = 4
+STATS_HOURS = 24
 STATS_PNG = Path(tempfile.gettempdir()) / "casm_t3_stats.png"
 STATS_TTL_S = 60
 
