@@ -164,8 +164,13 @@ def event(request: Request, name: str):
     else:
         e = rows[0]
         data_status = f"no dump attempt — {held_reason(e['tier'], e['tags'], e['dm'])}"
+    # auto src: tags hide on the web -- DM-overlap matching mislabels
+    # RFI; humans assign source labels instead.
+    tags_display = ",".join(t for t in rows[0]["tags"].split(",")
+                            if t and not t.startswith("src:"))
     return templates.TemplateResponse(request, "event.html", dict(
         ev=dict(rows[0]), triggers=triggers, labels=labels, pngs=pngs,
+        tags_display=tags_display,
         meta=json.dumps(meta, indent=2), label_choices=LABELS,
         data_status=data_status))
 

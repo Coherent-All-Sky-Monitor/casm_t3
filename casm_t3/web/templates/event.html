@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% block content %}
-<h2>{{ ev['name'] }} <span class="muted">tier {{ ev['tier'] }} · {{ ev['tags'] or 'no tags' }}</span></h2>
+<h2>{{ ev['name'] }} <span class="muted">tier {{ ev['tier'] }} · {{ tags_display or 'no tags' }}</span></h2>
 <p>{{ ev['event_utc'] }} · S/N {{ '%.1f' % ev['snr'] }} · DM {{ '%.2f' % ev['dm'] }} ·
 width {{ ev['width'] }} · beam {{ ev['beam'] }} ({{ ev['n_beams'] }} beams, {{ ev['n_members'] }} trials)
 · <b>{{ data_status }}</b></p>

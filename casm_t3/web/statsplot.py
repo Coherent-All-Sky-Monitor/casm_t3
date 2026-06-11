@@ -148,7 +148,7 @@ def render(db_path: str | Path, out_png: Path) -> Path:
         ax_ms.plot(centers, mx, "-", color="#639", lw=0.6, alpha=0.4,
                    label="max")
         ax_ms.legend(loc="upper left", fontsize=8, ncol=2)
-        ax_ms.set_ylabel("DBSCAN ms")
+        ax_ms.set_ylabel("DBSCAN compute time (ms)")
         ax_ms.set_ylim(bottom=0)
 
         duty = 100 * n.sum() * GULP_S / (edges[-1] - edges[0])
@@ -181,8 +181,9 @@ def render(db_path: str | Path, out_png: Path) -> Path:
     ax_lag.set_ylim(0, max([RING_LOOKBACK_S * 1.3]
                            + [a[2] * 1.15 for a in attempts if a[2]]))
 
-    # Beam occupancy of stored events, coloured by DM: RFI storms light
-    # up beam blocks at low DM, a transiting source draws a compact track.
+    # Beam occupancy of T2 stored events (the clusters table), coloured
+    # by DM: RFI storms light up beam blocks at low DM, a transiting
+    # source draws a compact track.
     if events:
         et = [datetime.fromisoformat(e[0]) for e in events]
         eb = np.array([e[1] for e in events], dtype=float)
@@ -198,7 +199,7 @@ def render(db_path: str | Path, out_png: Path) -> Path:
         ax_beam.text(0.5, 0.5, "no stored events in window", ha="center",
                      va="center", transform=ax_beam.transAxes, color="0.4",
                      fontsize=9)
-    ax_beam.set_ylabel("beam (stored events)")
+    ax_beam.set_ylabel("beam (T2 stored events)")
     ax_beam.set_ylim(-5, 516)
 
     for ax in axes:
