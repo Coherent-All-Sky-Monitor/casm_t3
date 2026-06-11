@@ -180,7 +180,10 @@ def plot(name: str, fname: str):
     f = (CANDIDATES_DIR / name / Path(fname).name).resolve()
     if not f.is_file() or CANDIDATES_DIR.resolve() not in f.parents:
         return RedirectResponse(f"/event/{name}")
-    return FileResponse(f)
+    # candidate PNGs are ~0.8 MB and effectively immutable once rendered;
+    # let browsers keep them so remote (ssh-tunnelled) viewing only pays
+    # the transfer once.
+    return FileResponse(f, headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.post("/event/{name}/label")
