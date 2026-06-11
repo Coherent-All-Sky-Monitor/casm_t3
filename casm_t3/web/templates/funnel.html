@@ -1,8 +1,13 @@
-{% extends "base.html" %}{% block content %}
-<h2>Candidate stats — T1 → T2</h2>
-<p class="muted">last 24 h: {{ day['gulps'] }} gulps · {{ day['cands'] }} T1 candidates ·
-{{ day['stored'] }} stored events · {{ day['would'] }} trigger decisions ·
-avg clustering {{ day['ms'] }} ms</p>
+{% extends "base.html" %}{% block head %}<meta http-equiv="refresh" content="60">{% endblock %}
+{% block content %}
+<h2>Pipeline stats — T1 → T2</h2>
+<p class="muted">last 1 h: {{ hour['cands_s'] }} T1 cands/s · {{ hour['stored'] or 0 }} stored ·
+{{ hour['would'] or 0 }} trigger-worthy · DBSCAN {{ hour['ms'] or '-' }} ms —
+last {{ '%g' % hours }} h: {{ win['cands'] or 0 }} T1 cands ({{ win['cands_s'] }}/s) ·
+{{ win['clusters'] or 0 }} clusters · {{ win['stored'] or 0 }} stored ·
+{{ win['would'] or 0 }} trigger-worthy · auto-refreshes every 60 s</p>
+<img src="/stats/plot.png?ts={{ ts }}" style="max-width:1050px">
+<h3>recent gulps</h3>
 <table><tr><th>gulp_utc</th><th>jobs</th><th>cands</th><th>clusters</th><th>stored</th><th>trig</th><th>ms</th></tr>
 {% for r in rows %}<tr><td>{{ r['gulp_utc'][:19] }}</td><td>{{ r['n_jobs'] }}</td>
 <td>{{ r['n_cands'] }}</td><td>{{ r['n_clusters'] }}</td><td>{{ r['n_stored'] }}</td>

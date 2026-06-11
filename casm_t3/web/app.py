@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,6 +27,8 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from casm_t2 import db as t2db
+
+from . import statsplot
 
 DB_PATH = t2db.DEFAULT_PATH
 CANDIDATES_DIR = Path("/mnt/nvme5/casm_pipeline/candidates")
@@ -170,15 +174,42 @@ def funnel_redirect():
     return RedirectResponse("/stats")
 
 
+STATS_HOURS = 4
+STATS_PNG = Path(tempfile.gettempdir()) / "casm_t3_stats.png"
+STATS_TTL_S = 60
+
+
+def _window_stats(hours: float) -> dict:
+    r = q("SELECT count(*) gulps, sum(n_cands) cands, sum(n_clusters) clusters,"
+          " sum(n_stored) stored, sum(n_would) would,"
+          " round(avg(clustering_ms),1) ms FROM gulp_stats WHERE gulp_utc > ?",
+          (statsplot.utc_cut(hours),))[0]
+    d = dict(r)
+    span_s = (r["gulps"] or 0) * statsplot.GULP_S
+    d["cands_s"] = round((r["cands"] or 0) / span_s, 1) if span_s else 0.0
+    return d
+
+
 @app.get("/stats")
-def stats(request: Request, limit: int = 120):
+def stats(request: Request, limit: int = 60, hours: float = STATS_HOURS):
+    try:
+        if (not STATS_PNG.exists()
+                or time.time() - STATS_PNG.stat().st_mtime > STATS_TTL_S):
+            statsplot.render(DB_PATH, STATS_PNG, hours=hours)
+    except Exception:  # the page must render even if charting breaks
+        pass
     rows = q("SELECT gulp_utc, n_jobs, n_cands, n_clusters, n_stored, n_would,"
              " clustering_ms FROM gulp_stats ORDER BY id DESC LIMIT ?", (limit,))
-    day = q("SELECT count(*) gulps, sum(n_cands) cands, sum(n_stored) stored,"
-            " sum(n_would) would, round(avg(clustering_ms),1) ms FROM gulp_stats"
-            " WHERE created_utc > datetime('now', '-1 day')")
-    return templates.TemplateResponse(request, "funnel.html",
-                                      dict(rows=rows, day=day[0]))
+    return templates.TemplateResponse(request, "funnel.html", dict(
+        rows=rows, hour=_window_stats(1), win=_window_stats(hours),
+        hours=hours, ts=int(time.time())))
+
+
+@app.get("/stats/plot.png")
+def stats_plot():
+    if not STATS_PNG.exists():
+        return RedirectResponse("/stats")
+    return FileResponse(STATS_PNG, headers={"Cache-Control": "no-cache"})
 
 
 INJ_PLOT_DIR = CANDIDATES_DIR / "injections"
