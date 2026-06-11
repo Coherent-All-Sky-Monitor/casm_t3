@@ -96,7 +96,8 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
     candidate width is annotated on the panel rather than used as the axis.
     The DM=0 panel is the raw band-averaged timeseries, no normalisation.
     """
-    dm, width = float(card["dm"]), int(card["width"])
+    # hella reports width as log2 of the boxcar length in samples
+    dm, width = float(card["dm"]), 2 ** int(card["width"])
     norm = single_pulse.normalise(data)
     dedis = single_pulse.dedisperse(norm, dm, freqs_mhz, tsamp_s)
 
