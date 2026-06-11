@@ -18,6 +18,10 @@ dependencies = [
 t3-dump-plotter = "casm_t3.apps.dump_plotter:main"
 t3-replot = "casm_t3.apps.replot:main"
 t3-janitor = "casm_t3.apps.janitor:main"
+t3-web = "casm_t3.web.app:main"
 
 [tool.setuptools.packages.find]
 include = ["casm_t3*"]
+
+[tool.setuptools.package-data]
+casm_t3 = ["web/templates/*.html"]

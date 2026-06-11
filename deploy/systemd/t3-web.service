@@ -1,0 +1,13 @@
+[Unit]
+Description=CASM monitor web UI (port 8050)
+After=network-online.target
+
+[Service]
+ExecStart=/home/casm/software/dev/casm_venvs/casm_offline_env/bin/t3-web
+Restart=always
+RestartSec=5
+StandardOutput=append:/mnt/nvme5/casm_pipeline/logs/t3_web.log
+StandardError=inherit
+
+[Install]
+WantedBy=default.target

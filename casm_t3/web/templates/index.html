@@ -1,0 +1,17 @@
+{% extends "base.html" %}{% block content %}
+<h2>T2 events ({{ rows|length }} shown)</h2>
+<form class="muted">tier <input name="tier" value="{{ tier }}" size="2">
+ tag <input name="tag" value="{{ tag }}" size="12"> limit <input name="limit" value="{{ limit }}" size="5">
+ <button>filter</button></form>
+<table><tr><th class="l">event</th><th class="l">label</th><th>utc</th><th>tier</th>
+<th class="l">tags</th><th>snr</th><th>dm</th><th>width</th><th>beam</th><th>nbeam</th><th>nmemb</th><th>plot</th></tr>
+{% for r in rows %}<tr>
+ <td class="l"><a href="/event/{{ r['name'] }}">{{ r['name'] }}</a></td>
+ <td class="l">{% if r['name'] in labels %}<span class="tag lbl-{{ labels[r['name']] }}">{{ labels[r['name']] }}</span>{% endif %}</td>
+ <td>{{ r['event_utc'][:19] }}</td><td>{{ r['tier'] }}</td>
+ <td class="l">{% for t in r['tags'].split(',') if t %}<span class="tag">{{ t }}</span>{% endfor %}</td>
+ <td>{{ '%.1f' % r['snr'] }}</td><td>{{ '%.1f' % r['dm'] }}</td><td>{{ r['width'] }}</td>
+ <td>{{ r['beam'] }}</td><td>{{ r['n_beams'] }}</td><td>{{ r['n_members'] }}</td>
+ <td>{{ '+' if r['name'] in plots else '-' }}</td>
+</tr>{% endfor %}</table>
+{% endblock %}

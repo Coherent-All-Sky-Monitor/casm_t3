@@ -1,0 +1,15 @@
+{% extends "base.html" %}{% block content %}
+<h2>{{ ev['name'] }} <span class="muted">tier {{ ev['tier'] }} · {{ ev['tags'] or 'no tags' }}</span></h2>
+<p>{{ ev['event_utc'] }} · S/N {{ '%.1f' % ev['snr'] }} · DM {{ '%.2f' % ev['dm'] }} ·
+width {{ ev['width'] }} · beam {{ ev['beam'] }} ({{ ev['n_beams'] }} beams, {{ ev['n_members'] }} trials)</p>
+<form method="post" action="/event/{{ ev['name'] }}/label">
+ {% for c in label_choices %}<button name="label" value="{{ c }}">{{ c }}</button> {% endfor %}
+ notes <input name="notes" size="40">
+</form>
+{% if labels %}<p>{% for l in labels %}<span class="tag lbl-{{ l['label'] }}">{{ l['label'] }} ({{ l['created_utc'][:16] }}) {{ l['notes'] }}</span>{% endfor %}</p>{% endif %}
+{% for p in pngs %}<img src="/event/{{ ev['name'] }}/plot/{{ p }}">{% endfor %}
+{% if triggers %}<h3>Triggers</h3><table><tr><th>kind</th><th>action</th><th class="l">detail</th><th>window</th><th>cleaned</th></tr>
+{% for t in triggers %}<tr><td>{{ t['kind'] }}</td><td>{{ t['action'] }}</td>
+<td class="l">{{ t['detail'][:120] }}</td><td>{{ t['dump_utc_start'] or '' }}</td><td>{{ t['cleaned_utc'] or '' }}</td></tr>{% endfor %}</table>{% endif %}
+<h3>Card</h3><pre>{{ meta }}</pre>
+{% endblock %}

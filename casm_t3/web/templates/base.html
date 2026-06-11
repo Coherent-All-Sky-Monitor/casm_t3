@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><title>CASM Monitor</title>
+<style>
+ body { font-family: system-ui, sans-serif; margin: 1.5em; color: #222; }
+ nav a { margin-right: 1.2em; text-decoration: none; color: #06c; font-weight: 600; }
+ table { border-collapse: collapse; margin-top: 1em; font-size: 14px; }
+ th, td { padding: 3px 10px; border-bottom: 1px solid #ddd; text-align: right; }
+ th { background: #f4f4f4; } td.l, th.l { text-align: left; }
+ tr:hover { background: #f8f8ff; }
+ a { color: #06c; } .tag { background:#eef; border-radius:3px; padding:1px 5px; margin-right:3px; font-size:12px;}
+ .lbl-frb{background:#cfc} .lbl-rfi{background:#fdd} .lbl-pulsar{background:#cdf} .lbl-unsure{background:#ffd}
+ img { max-width: 100%; border: 1px solid #ccc; margin-top: 1em; }
+ pre { background:#f6f6f6; padding:1em; overflow-x:auto; font-size:12px; }
+ .muted { color:#888; font-size:13px; }
+</style></head><body>
+<nav><a href="/">Events</a><a href="/funnel">Funnel</a><a href="/injections">Injections</a><a href="/frbs">FRBs</a>
+<span class="muted">refresh page to update</span></nav>
+{% block content %}{% endblock %}
+</body></html>

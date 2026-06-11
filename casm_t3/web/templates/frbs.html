@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block content %}
+<h2>FRB catalog</h2>
+<table><tr><th class="l">name</th><th>utc</th><th>snr</th><th>dm</th><th>width</th><th>beam</th><th class="l">notes</th></tr>
+{% for r in rows %}<tr><td class="l"><a href="/event/{{ r['name'] }}">{{ r['name'] }}</a></td>
+<td>{{ r['event_utc'][:19] }}</td><td>{{ '%.1f' % r['snr'] }}</td><td>{{ '%.1f' % r['dm'] }}</td>
+<td>{{ r['width'] }}</td><td>{{ r['beam'] }}</td><td class="l">{{ r['notes'] }}</td></tr>{% endfor %}</table>
+{% endblock %}

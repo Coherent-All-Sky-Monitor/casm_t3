@@ -1,0 +1,10 @@
+{% extends "base.html" %}{% block content %}
+<h2>T1 → T2 funnel</h2>
+<p class="muted">last 24 h: {{ day['gulps'] }} gulps · {{ day['cands'] }} T1 candidates ·
+{{ day['stored'] }} stored events · {{ day['would'] }} trigger decisions ·
+avg clustering {{ day['ms'] }} ms</p>
+<table><tr><th>gulp_utc</th><th>jobs</th><th>cands</th><th>clusters</th><th>stored</th><th>trig</th><th>ms</th></tr>
+{% for r in rows %}<tr><td>{{ r['gulp_utc'][:19] }}</td><td>{{ r['n_jobs'] }}</td>
+<td>{{ r['n_cands'] }}</td><td>{{ r['n_clusters'] }}</td><td>{{ r['n_stored'] }}</td>
+<td>{{ r['n_would'] }}</td><td>{{ r['clustering_ms'] }}</td></tr>{% endfor %}</table>
+{% endblock %}
