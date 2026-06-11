@@ -153,6 +153,17 @@ def stats(request: Request, limit: int = 120):
                                       dict(rows=rows, day=day[0]))
 
 
+INJ_PLOT_DIR = CANDIDATES_DIR / "injections"
+
+
+@app.get("/injections/plot/{file_id}")
+def injection_plot(file_id: str):
+    f = (INJ_PLOT_DIR / f"{Path(file_id).name}.png").resolve()
+    if not f.is_file() or INJ_PLOT_DIR.resolve() not in f.parents:
+        return RedirectResponse("/injections")
+    return FileResponse(f)
+
+
 @app.get("/injections")
 def injections(request: Request, limit: int = 200):
     rows = q("SELECT i.*, c.name AS event_name FROM injections i"
@@ -161,9 +172,10 @@ def injections(request: Request, limit: int = 200):
     day = q("SELECT count(*) n, sum(gate_t1) t1, sum(gate_t2) t2,"
             " sum(gate_trigger) tr, count(gate_t1) done FROM injections"
             " WHERE inject_utc > datetime('now', '-1 day')")
-    plots = {p.name for p in CANDIDATES_DIR.iterdir()} if CANDIDATES_DIR.exists() else set()
+    inj_plots = ({p.stem for p in INJ_PLOT_DIR.glob("*.png")}
+                 if INJ_PLOT_DIR.exists() else set())
     return templates.TemplateResponse(request, "injections.html",
-                                      dict(rows=rows, day=day[0], plots=plots))
+                                      dict(rows=rows, day=day[0], inj_plots=inj_plots))
 
 
 @app.get("/frbs")

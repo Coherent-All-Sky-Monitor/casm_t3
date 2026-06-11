@@ -12,7 +12,7 @@ trigger-eligible {{ day['tr'] }}/{{ day['done'] }}</p>
 <td>{{ r['gate_t1'] if r['gate_t1'] is not none else '?' }}</td>
 <td>{{ r['gate_t2'] if r['gate_t2'] is not none else '?' }}</td>
 <td>{{ r['gate_trigger'] if r['gate_trigger'] is not none else '?' }}</td>
-<td class="l">{% if r['event_name'] %}<a href="/event/{{ r['event_name'] }}">{{ r['event_name'] }}</a>
-{{ '+' if r['event_name'] in plots else '' }}{% else %}—{% endif %}</td>
+<td class="l">{% if r['file_id'] in inj_plots %}<a href="/injections/plot/{{ r['file_id'] }}">plot</a>{% endif %}
+{% if r['event_name'] %} · <a href="/event/{{ r['event_name'] }}">{{ r['event_name'] }}</a>{% endif %}</td>
 <td class="l">{{ r['fail_reason'] or 'ok' }}</td></tr>{% endfor %}</table>
 {% endblock %}

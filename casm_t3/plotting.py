@@ -167,8 +167,9 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
 
     _beam_panel(ax_bt, card, fig)
 
+    source = "" if card.get("source") == "blind" else f"{card.get('source', '')}   "
     fig.suptitle(
-        f"{card['candname']}   {card['source']}   S/N={card['snr']:.1f}   "
+        f"{card['candname']}   {source}S/N={card['snr']:.1f}   "
         f"DM={dm:.2f}   width={width * tsamp_s * 1e3:.1f} ms   "
         f"beam {card['beam']}   {card['event_utc']}", fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
