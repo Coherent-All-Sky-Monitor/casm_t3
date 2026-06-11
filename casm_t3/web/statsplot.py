@@ -218,24 +218,27 @@ def render(db_path: str | Path, out_png: Path) -> Path:
 
 
 def render_injections(db_path: str | Path, out_png: Path) -> Path:
-    """Injected vs recovered S/N for every gate-checked injection.
+    """Injection diagnostics: injected vs recovered S/N, and recovery
+    fraction vs pulse width.
 
-    The 1:1 line is the target; the systematic offset from it is the
+    On the left the 1:1 line is the target; the offset from it is the
     est_snr calibration error (injector predicts from bf_proc stats,
-    recovery is hella's matched-filter S/N).
+    recovery is hella's matched-filter S/N). On the right injections are
+    binned by injected width; marker colour is the bin's median DM and
+    size grows with the number of shots in the bin.
     """
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=10)
     try:
         rows = conn.execute(
-            "SELECT est_snr, rec_snr, gate_t1, gate_t2, fail_reason"
+            "SELECT est_snr, rec_snr, gate_t2, sigma_ms, dm"
             " FROM injections WHERE gate_t1 IS NOT NULL").fetchall()
     finally:
         conn.close()
 
-    fig, ax = plt.subplots(figsize=(11, 4.6))
-    rec = [(e, r) for e, r, g1, g2, _ in rows if r]
-    lost = [e for e, r, g1, g2, _ in rows if not r]
-    n_t2 = sum(1 for _, _, _, g2, _ in rows if g2)
+    fig, (ax, ax_w) = plt.subplots(1, 2, figsize=(11, 4.4))
+
+    rec = [(e, r) for e, r, g2, w, d in rows if r]
+    lost = [e for e, r, g2, w, d in rows if not r]
     top = 1.1 * max([max(e, r) for e, r in rec] + lost + [100])
     ax.plot([0, top], [0, top], "--", color="0.75", lw=1, label="1:1",
             zorder=1)
@@ -247,13 +250,44 @@ def render_injections(db_path: str | Path, out_png: Path) -> Path:
         ax.scatter(lost, [0] * len(lost), s=60, marker="x", color="#e63946",
                    linewidths=2, label="lost", zorder=3)
     ax.set_xlim(0, top), ax.set_ylim(0, top)
-    ax.set_xlabel("injected S/N (est_snr)")
-    ax.set_ylabel("recovered S/N (hella)")
-    ax.set_title(f"{len(rows)} injected / {n_t2} recovered at T2",
+    ax.set_xlabel("injected S/N")
+    ax.set_ylabel("recovered S/N")
+    ax.set_title(f"{len(rows)} injected / "
+                 f"{sum(1 for _, _, g2, _, _ in rows if g2)} recovered at T2",
                  fontsize=11)
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
     ax.legend(fontsize=9, frameon=False)
+
+    if rows:
+        w = np.array([r[3] for r in rows], dtype=float)
+        d = np.array([r[4] for r in rows], dtype=float)
+        ok = np.array([1.0 if r[2] else 0.0 for r in rows])
+        lo = 2 ** np.floor(np.log2(max(w.min(), 0.125)))
+        edges = lo * 2.0 ** np.arange(0, np.ceil(np.log2(w.max() / lo)) + 1.01)
+        xs, fr, dm_med, cnt = [], [], [], []
+        for a, b in zip(edges[:-1], edges[1:]):
+            sel = (w >= a) & (w < b)
+            if sel.any():
+                xs.append(np.sqrt(a * b))
+                fr.append(ok[sel].mean())
+                dm_med.append(np.median(d[sel]))
+                cnt.append(sel.sum())
+        sc = ax_w.scatter(xs, fr, c=dm_med, s=40 + 25 * np.array(cnt),
+                          cmap="plasma", vmin=0, edgecolors="white",
+                          linewidths=0.8, zorder=3)
+        fig.colorbar(sc, ax=ax_w, pad=0.02, label=r"median DM (pc cm$^{-3}$)")
+        ax_w.set_xscale("log")
+        ax_w.set_xlim(edges[0] * 0.8, edges[-1] * 1.2)
+    else:
+        ax_w.text(0.5, 0.5, "no reconciled injections", ha="center",
+                  va="center", transform=ax_w.transAxes, color="0.4")
+    ax_w.set_ylim(-0.05, 1.05)
+    ax_w.set_xlabel("injected pulse width (ms)")
+    ax_w.set_ylabel("recovery fraction (T2)")
+    ax_w.set_title("recovery vs width", fontsize=11)
+
+    for a in (ax, ax_w):
+        for side in ("top", "right"):
+            a.spines[side].set_visible(False)
     fig.tight_layout()
 
     out_png = Path(out_png)
