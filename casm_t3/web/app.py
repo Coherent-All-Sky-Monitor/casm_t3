@@ -55,11 +55,12 @@ def q_write(sql: str, args: tuple = ()) -> None:
 
 @app.get("/")
 def index(request: Request, tier: str = "", tag: str = "", limit: int = 200,
-          view: str = "triggered"):
+          view: str = "candidates"):
     where, args = ["name IS NOT NULL"], []
     if view != "all":
-        # Default view: only events that reached the trigger stage (a dump
-        # was sent, refused or shadowed) - i.e. things with data behind them.
+        # Default: candidates (events that reached the trigger stage). Under
+        # the everything-gets-plotted policy this is also the plot list; the
+        # plot column flags the rare failed render or refused dump.
         where.append("name IN (SELECT candname FROM triggers)")
     if tier:
         where.append("tier = ?")
@@ -73,8 +74,6 @@ def index(request: Request, tier: str = "", tag: str = "", limit: int = 200,
     labels = {r["name"]: r["label"] for r in
               q("SELECT name, label FROM labels GROUP BY name HAVING max(id)")}
     plots = {p.name for p in CANDIDATES_DIR.iterdir()} if CANDIDATES_DIR.exists() else set()
-    if view == "plots":
-        rows = [r for r in rows if r["name"] in plots]
     return templates.TemplateResponse(request, "index.html", dict(
         rows=rows, labels=labels, plots=plots, tier=tier, tag=tag, limit=limit,
         view=view))

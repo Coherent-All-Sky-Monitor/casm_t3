@@ -1,9 +1,8 @@
 {% extends "base.html" %}{% block content %}
 <h2>T2 events ({{ rows|length }} shown)</h2>
-<p class="muted">view:
-{% for v, label in [('plots', 'with plots'), ('triggered', 'trigger activity'), ('all', 'everything')] %}
-{% if view == v %}<b>[{{ label }}]</b>{% else %}<a href="/?view={{ v }}">{{ label }}</a>{% endif %}
-{% endfor %}</p>
+<p class="muted">{% if view == 'all' %}showing every stored T2 event —
+<a href="/">show candidates only</a>{% else %}showing candidates (triggered events; all get plots) —
+<a href="/?view=all">show every stored event</a>{% endif %}</p>
 <form class="muted">tier <input name="tier" value="{{ tier }}" size="2">
  tag <input name="tag" value="{{ tag }}" size="12"> limit <input name="limit" value="{{ limit }}" size="5">
  <button>filter</button></form>
