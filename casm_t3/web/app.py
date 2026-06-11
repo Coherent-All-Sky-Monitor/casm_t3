@@ -53,6 +53,26 @@ def q_write(sql: str, args: tuple = ()) -> None:
         conn.close()
 
 
+def friendly_outcome(action: str, detail: str) -> str:
+    """One memorable phrase per trigger outcome for the events table."""
+    if action == "triggered":
+        return "dumped"
+    tail = detail.rsplit(";", 1)[-1]
+    if "gulp_dup" in tail:
+        return "storm: 1 dump/gulp"
+    if tail == "spacing":
+        return "storm: 60 s gate"
+    if tail == "daily_cap":
+        return "cap: daily max"
+    if "Bad command" in tail:
+        return "too slow: buffer gone"
+    if tail.startswith("disk"):
+        return "low disk"
+    if action == "shadow":
+        return "shadow"
+    return f"{action}: {tail}"
+
+
 @app.get("/")
 def index(request: Request, tier: str = "", tag: str = "", limit: int = 200,
           view: str = "candidates"):
@@ -73,11 +93,12 @@ def index(request: Request, tier: str = "", tag: str = "", limit: int = 200,
              f" ORDER BY id DESC LIMIT ?", (*args, limit))
     labels = {r["name"]: r["label"] for r in
               q("SELECT name, label FROM labels GROUP BY name HAVING max(id)")}
-    # Best trigger outcome per event: explains a missing plot at a glance
-    # (suppressed = storm gate / one-dump-per-gulp, refused = dump daemon).
-    actions = {r["candname"]: r["action"] for r in
-               q("SELECT candname, action FROM triggers ORDER BY"
-                 " action = 'triggered', id")}
+    # Best trigger outcome per event, translated into a why-no-plot phrase;
+    # the raw audit detail rides along as a hover tooltip.
+    actions = {r["candname"]: (friendly_outcome(r["action"], r["detail"]),
+                               f"{r['action']}: {r['detail']}")
+               for r in q("SELECT candname, action, detail FROM triggers"
+                          " ORDER BY action = 'triggered', id")}
     plots = {p.name for p in CANDIDATES_DIR.iterdir()} if CANDIDATES_DIR.exists() else set()
     return templates.TemplateResponse(request, "index.html", dict(
         rows=rows, labels=labels, plots=plots, actions=actions, tier=tier,

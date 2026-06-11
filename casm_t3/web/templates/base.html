@@ -5,7 +5,7 @@
  nav a { margin-right: 1.2em; text-decoration: none; color: #06c; font-weight: 600; }
  table { border-collapse: collapse; margin-top: 1em; font-size: 14px; }
  th, td { padding: 3px 10px; border-bottom: 1px solid #ddd; text-align: right; }
- th { background: #f4f4f4; } td.l, th.l { text-align: left; }
+ th { background: #f4f4f4; cursor: pointer; user-select: none; } td.l, th.l { text-align: left; }
  tr:hover { background: #f8f8ff; }
  a { color: #06c; } .tag { background:#eef; border-radius:3px; padding:1px 5px; margin-right:3px; font-size:12px;}
  .lbl-frb{background:#cfc} .lbl-rfi{background:#fdd} .lbl-pulsar{background:#cdf} .lbl-unsure{background:#ffd}
@@ -16,4 +16,26 @@
 <nav><a href="/">T2 events</a><a href="/injections">Injections</a>
 <span class="muted">refresh page to update</span></nav>
 {% block content %}{% endblock %}
+<script>
+// Click a column header to sort (numeric when the column parses as numbers).
+document.querySelectorAll("table").forEach(table => {
+  const headers = table.querySelectorAll("tr:first-child th");
+  headers.forEach((th, col) => th.addEventListener("click", () => {
+    const rows = Array.from(table.querySelectorAll("tr")).slice(1);
+    const asc = th.dataset.asc !== "true";
+    headers.forEach(h => { delete h.dataset.asc; h.textContent = h.textContent.replace(/ [\u25b2\u25bc]$/, ""); });
+    th.dataset.asc = asc;
+    th.textContent += asc ? " \u25b2" : " \u25bc";
+    const key = r => (r.children[col] ? r.children[col].textContent.trim() : "");
+    const allNum = rows.every(r => key(r) === "" || !isNaN(parseFloat(key(r))));
+    rows.sort((a, b) => {
+      const x = key(a), y = key(b);
+      const cmp = allNum ? (parseFloat(x) || -Infinity) - (parseFloat(y) || -Infinity)
+                         : x.localeCompare(y);
+      return asc ? cmp : -cmp;
+    });
+    rows.forEach(r => table.appendChild(r));
+  }));
+});
+</script>
 </body></html>

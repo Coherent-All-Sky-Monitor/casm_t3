@@ -15,7 +15,7 @@
  <td class="l">{% for t in r['tags'].split(',') if t %}<span class="tag">{{ t }}</span>{% endfor %}</td>
  <td>{{ '%.1f' % r['snr'] }}</td><td>{{ '%.1f' % r['dm'] }}</td><td>{{ r['width'] }}</td>
  <td>{{ r['beam'] }}</td><td>{{ r['n_beams'] }}</td><td>{{ r['n_members'] }}</td>
- <td>{{ actions.get(r['name'], '') }}</td>
+ <td class="l" title="{{ actions.get(r['name'], ('',''))[1] }}">{{ actions.get(r['name'], ('',''))[0] }}</td>
  <td>{{ '+' if r['name'] in plots else '-' }}</td>
 </tr>{% endfor %}</table>
 {% endblock %}
