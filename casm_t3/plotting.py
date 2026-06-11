@@ -22,6 +22,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib import colors as mcolors
 
 from . import single_pulse
 
@@ -30,6 +31,11 @@ NBEAM_TOTAL = 512
 # transientX uses viridis for both image panels (candplot.cpp: ax_ft and
 # ax_dmt both pcolor with "viridis"); match it here.
 WATERFALL_CMAP = "viridis"
+
+# DM colour scale for the beam scatter: plasma with the bright-yellow top
+# cut off — full plasma is unreadable on the white panel background.
+BEAM_DM_CMAP = mcolors.ListedColormap(
+    plt.get_cmap("plasma")(np.linspace(0.0, 0.8, 256)), name="plasma_dark")
 
 
 def _block_mean_freqs(freqs_mhz: np.ndarray, ffactor: int) -> np.ndarray:
@@ -51,9 +57,12 @@ def _beam_panel(ax, card: dict, fig) -> None:
         dt, mbeam, mdm, msnr = m[:, 0], m[:, 1], m[:, 2], m[:, 3]
 
         sc = ax.scatter(dt, mbeam, c=mdm, s=4 + 2 * np.clip(msnr - 10, 0, 20),
-                        cmap="plasma", vmin=0, vmax=max(50.0, 1.5 * card["dm"]),
-                        alpha=0.7, linewidths=0)
-        fig.colorbar(sc, ax=ax, pad=0.01, label=r"DM (pc cm$^{-3}$)")
+                        cmap=BEAM_DM_CMAP, vmin=0, vmax=max(50.0, 1.5 * card["dm"]),
+                        alpha=0.85, linewidths=0)
+        # Colorbar in an inset just outside the axes: fig.colorbar(ax=...)
+        # would shrink this panel and break its alignment with the row above.
+        cax = ax.inset_axes((1.008, 0.0, 0.012, 1.0))
+        fig.colorbar(sc, cax=cax, label=r"DM (pc cm$^{-3}$)")
         for edge in range(64, NBEAM_TOTAL, 64):
             ax.axhline(edge, color="0.85", lw=0.4, zorder=0)
 
