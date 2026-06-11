@@ -73,6 +73,8 @@ def index(request: Request, tier: str = "", tag: str = "", limit: int = 200,
     labels = {r["name"]: r["label"] for r in
               q("SELECT name, label FROM labels GROUP BY name HAVING max(id)")}
     plots = {p.name for p in CANDIDATES_DIR.iterdir()} if CANDIDATES_DIR.exists() else set()
+    if view == "plots":
+        rows = [r for r in rows if r["name"] in plots]
     return templates.TemplateResponse(request, "index.html", dict(
         rows=rows, labels=labels, plots=plots, tier=tier, tag=tag, limit=limit,
         view=view))
