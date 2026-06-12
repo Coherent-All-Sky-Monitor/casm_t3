@@ -133,10 +133,9 @@ def index(request: Request, tier: str = "", tag: str = "", limit: int = 200,
     if view != "all" and not tag:
         # Default: dump attempts only — events T2 shortlisted AND tried to
         # dump. Each has a plot or a red miss reason. Storm-gate and 60 s
-        # suppressions live in the all-stored-events view. A tag search
-        # spans every stored event instead: tagged events (rfi_wide, veto,
-        # injection) never reach a dump attempt, so this restriction would
-        # hide all of their matches.
+        # suppressions live in the all-stored-events view. A label search
+        # spans every stored event instead, so labels on held/suppressed
+        # events still surface.
         where.append("name IN (SELECT candname FROM triggers WHERE"
                      " action IN ('triggered', 'refused_daemon', 'failed')"
                      " OR (action = 'refused' AND detail LIKE '%disk%'))")
@@ -144,7 +143,10 @@ def index(request: Request, tier: str = "", tag: str = "", limit: int = 200,
         where.append("tier = ?")
         args.append(tier)
     if tag:
-        where.append("tags LIKE ?")
+        # Matches the human-assigned label (frb/pulsar/rfi/unsure), newest
+        # label per event — NOT the pipeline's automatic tags column.
+        where.append("name IN (SELECT name FROM labels WHERE label LIKE ?"
+                     " AND id IN (SELECT MAX(id) FROM labels GROUP BY name))")
         args.append(f"%{tag}%")
     rows = q(f"SELECT name, event_utc, tier, tags, snr, dm, width, beam, n_beams,"
              f" n_members FROM clusters WHERE {' AND '.join(where)}"

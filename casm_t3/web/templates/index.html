@@ -4,7 +4,7 @@
 <p class="muted">T1 reports S/N &ge; 10; tiers: A &ge; {{ '%g' % tiers['A'] }} · B &ge; {{ '%g' % tiers['B'] }} · C &ge; {{ '%g' % tiers['C'] }} —
 blind triggers need tier A/B and DM &ge; {{ '%g' % tiers['dm_floor'] }}; tier C is stored for bookkeeping only, below C is dropped</p>
 <form class="muted">tier <input name="tier" value="{{ tier }}" size="2">
- tag <input name="tag" value="{{ tag }}" size="12" title="substring match over tags (rfi_wide, veto, injection, would_trigger, src:...); searches every stored event, not just dump attempts"> limit <input name="limit" value="{{ limit }}" size="5">
+ label <input name="tag" value="{{ tag }}" size="12" title="your label from the event-page buttons (frb / pulsar / rfi / unsure), any case; searches every stored event, not just dump attempts"> limit <input name="limit" value="{{ limit }}" size="5">
  <button>filter</button></form>
 <table><tr><th class="l">event</th><th class="l">label</th><th>utc</th><th title="OVRO wall clock (America/Los_Angeles, DST-aware)">local</th><th>tier</th>
 <th class="l">tags</th><th>snr</th><th>dm</th><th>width ms</th><th>beam</th><th>nbeam</th><th>nmemb</th><th>trigger</th></tr>
