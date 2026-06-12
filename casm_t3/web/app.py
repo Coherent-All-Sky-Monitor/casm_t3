@@ -132,7 +132,8 @@ def index(request: Request, tier: str = "", tag: str = "", limit: int = 200,
              f" n_members FROM clusters WHERE {' AND '.join(where)}"
              f" ORDER BY id DESC LIMIT ?", (*args, limit))
     labels = {r["name"]: r["label"] for r in
-              q("SELECT name, label FROM labels GROUP BY name HAVING max(id)")}
+              q("SELECT name, label FROM labels WHERE id IN"
+                " (SELECT MAX(id) FROM labels GROUP BY name)")}
     # Best trigger outcome per event, translated into a why-no-plot phrase;
     # the raw audit detail rides along as a hover tooltip.
     actions = {r["candname"]: (friendly_outcome(r["action"], r["detail"]),
