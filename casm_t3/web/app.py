@@ -130,10 +130,13 @@ def friendly_outcome(action: str, detail: str) -> str:
 def index(request: Request, tier: str = "", tag: str = "", limit: int = 200,
           view: str = "candidates"):
     where, args = ["name IS NOT NULL"], []
-    if view != "all":
+    if view != "all" and not tag:
         # Default: dump attempts only — events T2 shortlisted AND tried to
         # dump. Each has a plot or a red miss reason. Storm-gate and 60 s
-        # suppressions live in the all-stored-events view.
+        # suppressions live in the all-stored-events view. A tag search
+        # spans every stored event instead: tagged events (rfi_wide, veto,
+        # injection) never reach a dump attempt, so this restriction would
+        # hide all of their matches.
         where.append("name IN (SELECT candname FROM triggers WHERE"
                      " action IN ('triggered', 'refused_daemon', 'failed')"
                      " OR (action = 'refused' AND detail LIKE '%disk%'))")

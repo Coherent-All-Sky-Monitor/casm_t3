@@ -28,14 +28,19 @@ document.querySelectorAll("table").forEach(table => {
     th.dataset.asc = asc;
     th.textContent += asc ? " \u25b2" : " \u25bc";
     const key = r => (r.children[col] ? r.children[col].textContent.trim() : "");
-    const allNum = rows.every(r => key(r) === "" || !isNaN(parseFloat(key(r))));
+    // Strict numeric test: parseFloat would read "2026-06-12T04:48" as 2026
+    // and "06-12 05:07" as 6, making date columns compare equal (= no sort).
+    // Non-numeric columns use localeCompare, which orders ISO dates correctly.
+    const NUM = /^-?\d+(\.\d+)?$/;
+    const allNum = rows.every(r => key(r) === "" || NUM.test(key(r)));
+    const num = s => s === "" ? -Infinity : parseFloat(s);
     rows.sort((a, b) => {
       const x = key(a), y = key(b);
-      const cmp = allNum ? (parseFloat(x) || -Infinity) - (parseFloat(y) || -Infinity)
-                         : x.localeCompare(y);
+      const cmp = allNum ? num(x) - num(y) : x.localeCompare(y);
       return asc ? cmp : -cmp;
     });
-    rows.forEach(r => table.appendChild(r));
+    const parent = table.rows[0].parentNode;  // keep rows inside the tbody
+    rows.forEach(r => parent.appendChild(r));
   }));
 });
 </script>
