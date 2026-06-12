@@ -35,7 +35,7 @@ DB_PATH = t2db.DEFAULT_PATH
 T2D_CONFIG = Path("/home/casm/software/dev/casm_t2/config/t2d.yaml")
 CANDIDATES_DIR = Path("/mnt/nvme5/casm_pipeline/candidates")
 SPOOL_DIRS = [Path("/mnt/nvme4/data/casm/t2_spool")]
-LABELS = ("frb", "pulsar", "rfi", "unsure")
+LABELS = ("frb", "pulsar", "rfi", "unsure", "injection")
 
 app = FastAPI(title="CASM Monitor")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -119,9 +119,10 @@ def index(request: Request, tier: str = "", tag: str = "", limit: int = 200,
         # Default: dump attempts only — events T2 shortlisted AND tried to
         # dump. Each has a plot or a red miss reason. Storm-gate and 60 s
         # suppressions live in the all-stored-events view.
-        where.append("name IN (SELECT candname FROM triggers WHERE"
+        where.append("(name IN (SELECT candname FROM triggers WHERE"
                      " action IN ('triggered', 'refused_daemon', 'failed')"
-                     " OR (action = 'refused' AND detail LIKE '%disk%'))")
+                     " OR (action = 'refused' AND detail LIKE '%disk%'))"
+                     " OR tags LIKE '%injection%')")
     if tier:
         where.append("tier = ?")
         args.append(tier)
@@ -132,7 +133,8 @@ def index(request: Request, tier: str = "", tag: str = "", limit: int = 200,
              f" n_members FROM clusters WHERE {' AND '.join(where)}"
              f" ORDER BY id DESC LIMIT ?", (*args, limit))
     labels = {r["name"]: r["label"] for r in
-              q("SELECT name, label FROM labels GROUP BY name HAVING max(id)")}
+              q("SELECT name, label FROM labels WHERE id IN"
+                " (SELECT MAX(id) FROM labels GROUP BY name)")}
     # Best trigger outcome per event, translated into a why-no-plot phrase;
     # the raw audit detail rides along as a hover tooltip.
     actions = {r["candname"]: (friendly_outcome(r["action"], r["detail"]),
@@ -157,6 +159,11 @@ def event(request: Request, name: str):
     labels = q("SELECT * FROM labels WHERE name = ? ORDER BY id DESC", (name,))
     art_dir = CANDIDATES_DIR / name
     pngs = sorted(p.name for p in art_dir.glob("*.png")) if art_dir.exists() else []
+    inj = None
+    if "injection" in rows[0]["tags"].split(","):
+        r = q("SELECT file_id, est_snr, dm AS inj_dm, sigma_ms FROM injections"
+              " WHERE matched_cluster = ?", (rows[0]["id"],))
+        inj = dict(r[0]) if r else None
     meta = {}
     for j in ([art_dir / f"{name}.json"] if art_dir.exists() else []) + \
              [d / f"{name}.json.done" for d in SPOOL_DIRS] + \
@@ -184,7 +191,7 @@ def event(request: Request, name: str):
     tags_display = ",".join(t for t in rows[0]["tags"].split(",")
                             if t and not t.startswith("src:"))
     return templates.TemplateResponse(request, "event.html", dict(
-        ev=dict(rows[0]), triggers=triggers, labels=labels, pngs=pngs,
+        ev=dict(rows[0]), triggers=triggers, labels=labels, pngs=pngs, inj=inj,
         tags_display=tags_display,
         meta=json.dumps(meta, indent=2), label_choices=LABELS,
         data_status=data_status))

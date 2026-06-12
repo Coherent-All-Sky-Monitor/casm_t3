@@ -9,6 +9,11 @@ width {{ '%.1f' % (2 ** ev['width'] * 1.048576) }} ms · beam {{ ev['beam'] }} (
 </form>
 {% if labels %}<p>{% for l in labels %}<span class="tag lbl-{{ l['label'] }}">{{ l['label'] }} ({{ l['created_utc'][:16] }}) {{ l['notes'] }}</span>{% endfor %}</p>{% endif %}
 {% for p in pngs %}<img src="/event/{{ ev['name'] }}/plot/{{ p }}">{% endfor %}
+{% if inj %}<p class="muted"><span class="tag lbl-injection">injection</span>
+synthetic pulse — truth plot below (beam dumps tap upstream of the injection
+merge, so no dump/candidate plot can exist; est S/N {{ '%.0f' % (inj['est_snr'] or 0) }},
+DM {{ '%.1f' % inj['inj_dm'] }}, sigma {{ '%.1f' % inj['sigma_ms'] }} ms)</p>
+<img src="/injections/plot/{{ inj['file_id'] }}">{% endif %}
 {% if triggers %}<h3>Triggers</h3><table><tr><th>kind</th><th>action</th><th class="l">detail</th><th>window</th><th>cleaned</th></tr>
 {% for t in triggers %}<tr><td>{{ t['kind'] }}</td><td>{{ t['action'] }}</td>
 <td class="l">{{ t['detail'][:120] }}</td><td>{{ t['dump_utc_start'] or '' }}</td><td>{{ t['cleaned_utc'] or '' }}</td></tr>{% endfor %}</table>{% endif %}
