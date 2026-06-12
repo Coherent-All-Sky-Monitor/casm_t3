@@ -1,8 +1,8 @@
 {% extends "base.html" %}{% block content %}
 <h2>T2 events ({{ rows|length }} shown)</h2>
 <p class="muted">{% if view == 'all' %}<a href="/">show dump attempts only</a>{% else %}<a href="/?view=all">show every stored event</a>{% endif %}</p>
-<p class="muted">tiers (T1 S/N bands): A &ge; {{ '%g' % tiers['A'] }} · B &ge; {{ '%g' % tiers['B'] }} · C &ge; {{ '%g' % tiers['C'] }} —
-blind triggers need tier A/B and DM &ge; {{ '%g' % tiers['dm_floor'] }}; tier C is stored for bookkeeping only</p>
+<p class="muted">T1 reports S/N &ge; 10; tiers: A &ge; {{ '%g' % tiers['A'] }} · B &ge; {{ '%g' % tiers['B'] }} · C &ge; {{ '%g' % tiers['C'] }} —
+blind triggers need tier A/B and DM &ge; {{ '%g' % tiers['dm_floor'] }}; tier C is stored for bookkeeping only, below C is dropped</p>
 <form class="muted">tier <input name="tier" value="{{ tier }}" size="2">
  tag <input name="tag" value="{{ tag }}" size="12"> limit <input name="limit" value="{{ limit }}" size="5">
  <button>filter</button></form>
