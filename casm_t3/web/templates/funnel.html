@@ -38,7 +38,7 @@ tick(); setInterval(tick, 1000);
 {% endif %}
 <p class="muted">last 1 h: {{ hour['cands_s'] }} T1 cands/s · {{ hour['stored'] or 0 }} stored ·
 {{ hour['would'] or 0 }} trigger-worthy —
-since {{ day_label }}: {{ win['cands'] or 0 }} T1 cands ({{ win['cands_s'] }}/s) ·
+last 24 h (rolling): {{ win['cands'] or 0 }} T1 cands ({{ win['cands_s'] }}/s) ·
 {{ win['clusters'] or 0 }} clusters · {{ win['stored'] or 0 }} stored ·
 {{ win['would'] or 0 }} trigger-worthy · auto-refreshes every 60 s</p>
 <img src="/stats/plot.png?ts={{ ts }}" style="max-width:1050px">

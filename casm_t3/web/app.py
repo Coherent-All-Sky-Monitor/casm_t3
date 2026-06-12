@@ -41,6 +41,21 @@ app = FastAPI(title="CASM Monitor")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 
+def ovro_local(utc_iso: str) -> str:
+    """UTC ISO string -> OVRO wall clock. zoneinfo applies the real
+    PST/PDT rules, so the column is daylight-saving safe."""
+    try:
+        t = datetime.fromisoformat(utc_iso)
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        return t.astimezone(statsplot.OVRO_TZ).strftime("%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return ""
+
+
+templates.env.filters["ovro_local"] = ovro_local
+
+
 def q(sql: str, args: tuple = ()) -> list[sqlite3.Row]:
     conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=10)
     conn.row_factory = sqlite3.Row
@@ -250,11 +265,9 @@ def stats(request: Request, limit: int = 60):
     now = nowpanel.snapshot()
     rows = q("SELECT gulp_utc, n_jobs, n_cands, n_clusters, n_stored, n_would,"
              " clustering_ms FROM gulp_stats ORDER BY id DESC LIMIT ?", (limit,))
-    day0 = statsplot.day_start().astimezone(statsplot.OVRO_TZ)
     return templates.TemplateResponse(request, "funnel.html", dict(
         rows=rows, hour=_window_stats(statsplot.utc_cut(1)),
-        win=_window_stats(statsplot.day_cut()),
-        day_label=day0.strftime("%H:%M local %b %d"), now=now,
+        win=_window_stats(statsplot.utc_cut(statsplot.WINDOW_H)), now=now,
         ts=int(time.time())))
 
 

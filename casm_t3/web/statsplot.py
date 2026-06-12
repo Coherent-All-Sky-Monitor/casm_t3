@@ -5,8 +5,8 @@ full-day chart reads ~10k rows -- the raw T1 stream (millions of candidates
 an hour) never gets near the browser. Ad-hoc per-candidate exploration stays
 in hiplot fed by t2-replay's CSV export; this page is the always-on view.
 
-The window is the current observing day: from the most recent 05:00 at OVRO
-to now, so the chart grows through the day and resets each morning.
+The window is the trailing 24 hours, rolling continuously -- no daily
+reset, so the chart always shows a full day of history.
 
 The PNG is re-rendered at most once a minute (the route checks mtime) and
 written atomically so a refresh never sees a half-drawn file.
@@ -15,7 +15,7 @@ written atomically so a refresh never sees a half-drawn file.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, time as dtime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -32,7 +32,7 @@ GULP_S = 8192 * 1.048576e-3  # gulp duration: 8192 samples at 1.048576 ms
 # Chart axis only -- the DB and all pipeline timestamps stay UTC. zoneinfo
 # applies the real PST/PDT rules, so the axis is daylight-saving safe.
 OVRO_TZ = ZoneInfo("America/Los_Angeles")
-DAY_START_HOUR = 5  # observing day rolls over at 05:00 local
+WINDOW_H = 24.0  # rolling chart window
 
 # Intensity ring look-back: CAND_DUMP_READ_DELAY in medusa_bf_proc.cfg.
 # Dumps requested later than this after the event miss the ring.
@@ -50,23 +50,8 @@ def utc_cut(hours: float) -> str:
         "%Y-%m-%dT%H:%M:%S")
 
 
-def day_start() -> datetime:
-    """Most recent 05:00 at OVRO, as aware UTC. DST-safe: the boundary is
-    constructed on the local calendar, not by subtracting fixed hours."""
-    now_l = datetime.now(OVRO_TZ)
-    start = datetime.combine(now_l.date(), dtime(DAY_START_HOUR), OVRO_TZ)
-    if start > now_l:
-        start = datetime.combine(now_l.date() - timedelta(days=1),
-                                 dtime(DAY_START_HOUR), OVRO_TZ)
-    return start.astimezone(timezone.utc)
-
-
-def day_cut() -> str:
-    return day_start().strftime("%Y-%m-%dT%H:%M:%S")
-
-
 def _fetch(db_path: str | Path):
-    cut = day_cut()
+    cut = utc_cut(WINDOW_H)
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=10)
     try:
         gulps = conn.execute(
@@ -96,8 +81,8 @@ def render(db_path: str | Path, out_png: Path) -> Path:
 
     fig, axes = plt.subplots(6, 1, figsize=(11, 13), sharex=True)
     ax_rate, ax_clus, ax_ev, ax_lag, ax_ms, ax_beam = axes
-    t0 = day_start()
     now = datetime.now(timezone.utc)
+    t0 = now - timedelta(hours=WINDOW_H)
 
     if gulps:
         t = np.array([datetime.fromisoformat(g[0]).timestamp() for g in gulps])
@@ -152,9 +137,8 @@ def render(db_path: str | Path, out_png: Path) -> Path:
         ax_ms.set_ylim(bottom=0)
 
         duty = 100 * n.sum() * GULP_S / (edges[-1] - edges[0])
-        local0 = t0.astimezone(OVRO_TZ)
         ax_rate.set_title(
-            f"observing day since {local0:%Y-%m-%d %H:%M} local - "
+            f"last 24 h (rolling) - "
             f"{len(gulps)} gulps, duty cycle {duty:.0f}%, "
             f"{len(dumps)} dumps, {len(misses)} ring misses", fontsize=10)
     else:
