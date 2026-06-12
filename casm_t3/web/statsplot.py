@@ -138,7 +138,7 @@ def render(db_path: str | Path, out_png: Path) -> Path:
 
         duty = 100 * n.sum() * GULP_S / (edges[-1] - edges[0])
         ax_rate.set_title(
-            f"last 24 h (rolling) - "
+            f"last 24 h - "
             f"{len(gulps)} gulps, duty cycle {duty:.0f}%, "
             f"{len(dumps)} dumps, {len(misses)} ring misses", fontsize=10)
     else:
