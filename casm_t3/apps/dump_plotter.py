@@ -129,7 +129,7 @@ def process_card(card_path: Path, args: argparse.Namespace) -> None:
         png,
         f"*{card['source']}* single-pulse candidate `{candname}`: "
         f"S/N {card['snr']:.1f}, DM {card['dm']:.2f}, beam {card['beam']}, "
-        f"width {card['width']} samp ({LOCAL_HOSTNAME})",
+        f"width {2 ** int(card['width'])} samp ({LOCAL_HOSTNAME})",
         channel=args.slack_channel)
 
     if delete_after:
