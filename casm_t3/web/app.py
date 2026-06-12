@@ -22,6 +22,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import yaml
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -31,6 +32,7 @@ from casm_t2 import db as t2db
 from . import nowpanel, statsplot
 
 DB_PATH = t2db.DEFAULT_PATH
+T2D_CONFIG = Path("/home/casm/software/dev/casm_t2/config/t2d.yaml")
 CANDIDATES_DIR = Path("/mnt/nvme5/casm_pipeline/candidates")
 SPOOL_DIRS = [Path("/mnt/nvme4/data/casm/t2_spool")]
 LABELS = ("frb", "pulsar", "rfi", "unsure")
@@ -57,12 +59,24 @@ def q_write(sql: str, args: tuple = ()) -> None:
         conn.close()
 
 
-def held_reason(tier: str, tags: str, dm: float) -> str:
+def trigger_cfg() -> dict:
+    """Live tier/DM-floor values from the t2d config, so the legend and
+    held-reasons can never drift from what the daemon enforces."""
+    out = {"A": 30.0, "B": 15.0, "C": 12.0, "dm_floor": 20.0}
+    try:
+        cfg = yaml.safe_load(T2D_CONFIG.read_text())
+        out.update({k: float(v) for k, v in cfg.get("tiers", {}).items()})
+        out["dm_floor"] = float(cfg.get("filters", {}).get("dm_floor", out["dm_floor"]))
+    except Exception:
+        pass
+    return out
+
+
+def held_reason(tier: str, tags: str, dm: float, tcfg: dict) -> str:
     """Why a stored event never reached a dump attempt (no triggers row).
 
     Mirrors t2d._wants_trigger: tag exclusions first, then the tier/DM
-    gate (tiers are S/N bands: A >= 30, B >= 15, C >= 12; blind triggers
-    need tier A/B and DM >= the 20 pc/cc floor).
+    gate (blind triggers need tier A/B and DM >= the floor).
     """
     if "injection" in tags:
         return "injection: never dumped (policy)"
@@ -71,9 +85,9 @@ def held_reason(tier: str, tags: str, dm: float) -> str:
     if "rfi_wide" in tags:
         return "RFI: too many beams"
     if tier not in ("A", "B"):
-        return "S/N below tier B (15)"
-    if dm < 20.0:
-        return "DM below 20 floor"
+        return f"S/N below tier B ({tcfg['B']:g})"
+    if dm < tcfg["dm_floor"]:
+        return f"DM below {tcfg['dm_floor']:g} floor"
     return "held by filters"
 
 
@@ -126,11 +140,12 @@ def index(request: Request, tier: str = "", tag: str = "", limit: int = 200,
                for r in q("SELECT candname, action, detail FROM triggers"
                           " ORDER BY action = 'triggered', id")}
     plots = {p.name for p in CANDIDATES_DIR.iterdir()} if CANDIDATES_DIR.exists() else set()
-    held = {r["name"]: held_reason(r["tier"], r["tags"], r["dm"])
+    tcfg = trigger_cfg()
+    held = {r["name"]: held_reason(r["tier"], r["tags"], r["dm"], tcfg)
             for r in rows if r["name"] not in actions}
     return templates.TemplateResponse(request, "index.html", dict(
         rows=rows, labels=labels, plots=plots, actions=actions, held=held,
-        tier=tier, tag=tag, limit=limit, view=view))
+        tier=tier, tag=tag, limit=limit, view=view, tiers=tcfg))
 
 
 @app.get("/event/{name}")
@@ -163,7 +178,7 @@ def event(request: Request, name: str):
         data_status = f"no dump — {friendly_outcome(last['action'], last['detail'])}"
     else:
         e = rows[0]
-        data_status = f"no dump attempt — {held_reason(e['tier'], e['tags'], e['dm'])}"
+        data_status = f"no dump attempt — {held_reason(e['tier'], e['tags'], e['dm'], trigger_cfg())}"
     # auto src: tags hide on the web -- DM-overlap matching mislabels
     # RFI; humans assign source labels instead.
     tags_display = ",".join(t for t in rows[0]["tags"].split(",")
