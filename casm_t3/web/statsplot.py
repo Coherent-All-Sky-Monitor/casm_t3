@@ -32,7 +32,19 @@ GULP_S = 8192 * 1.048576e-3  # gulp duration: 8192 samples at 1.048576 ms
 # Chart axis only -- the DB and all pipeline timestamps stay UTC. zoneinfo
 # applies the real PST/PDT rules, so the axis is daylight-saving safe.
 OVRO_TZ = ZoneInfo("America/Los_Angeles")
-WINDOW_H = 24.0  # rolling chart window
+WINDOW_H = 24.0  # default rolling chart window
+
+# Selectable windows for the /stats menu: (hours, label). The chart binning
+# (bw = max(60 s, span/240)) auto-scales, so all of these render unchanged.
+WINDOW_PRESETS = [(12, "12 h"), (24, "24 h"), (48, "48 h"), (168, "1 week"),
+                  (720, "1 month")]
+
+
+def window_label(hours: float) -> str:
+    for h, lbl in WINDOW_PRESETS:
+        if abs(h - hours) < 1e-6:
+            return lbl
+    return f"{hours:g} h"
 
 # Intensity ring look-back: CAND_DUMP_READ_DELAY in medusa_bf_proc.cfg.
 # Dumps requested later than this after the event miss the ring.
@@ -50,8 +62,8 @@ def utc_cut(hours: float) -> str:
         "%Y-%m-%dT%H:%M:%S")
 
 
-def _fetch(db_path: str | Path):
-    cut = utc_cut(WINDOW_H)
+def _fetch(db_path: str | Path, hours: float):
+    cut = utc_cut(hours)
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=10)
     try:
         gulps = conn.execute(
@@ -74,15 +86,15 @@ def _fetch(db_path: str | Path):
     return gulps, attempts, events
 
 
-def render(db_path: str | Path, out_png: Path) -> Path:
-    gulps, attempts, events = _fetch(db_path)
+def render(db_path: str | Path, out_png: Path, hours: float = WINDOW_H) -> Path:
+    gulps, attempts, events = _fetch(db_path, hours)
     dumps = [a for a in attempts if a[1] == "triggered"]
     misses = [a for a in attempts if a[1] != "triggered"]
 
     fig, axes = plt.subplots(6, 1, figsize=(11, 13), sharex=True)
     ax_rate, ax_clus, ax_ev, ax_lag, ax_ms, ax_beam = axes
     now = datetime.now(timezone.utc)
-    t0 = now - timedelta(hours=WINDOW_H)
+    t0 = now - timedelta(hours=hours)
 
     if gulps:
         t = np.array([datetime.fromisoformat(g[0]).timestamp() for g in gulps])
@@ -138,7 +150,7 @@ def render(db_path: str | Path, out_png: Path) -> Path:
 
         duty = 100 * n.sum() * GULP_S / (edges[-1] - edges[0])
         ax_rate.set_title(
-            f"last 24 h - "
+            f"last {window_label(hours)} - "
             f"{len(gulps)} gulps, duty cycle {duty:.0f}%, "
             f"{len(dumps)} dumps, {len(misses)} ring misses", fontsize=10)
     else:
@@ -193,7 +205,8 @@ def render(db_path: str | Path, out_png: Path) -> Path:
         ax.grid(alpha=0.25)
     ax_beam.set_xlim(t0, now)
     ax_beam.set_xlabel("OVRO local time (America/Los_Angeles)")
-    ax_beam.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M", tz=OVRO_TZ))
+    ax_beam.xaxis.set_major_formatter(
+        mdates.DateFormatter("%H:%M" if hours <= 48 else "%m-%d", tz=OVRO_TZ))
     fig.tight_layout()
 
     out_png = Path(out_png)

@@ -244,8 +244,12 @@ def funnel_redirect():
     return RedirectResponse("/stats")
 
 
-STATS_PNG = Path(tempfile.gettempdir()) / "casm_t3_stats.png"
 STATS_TTL_S = 60
+
+
+def _stats_png(hours: int) -> Path:
+    """Per-window cache file so switching ranges doesn't thrash one PNG."""
+    return Path(tempfile.gettempdir()) / f"casm_t3_stats_{hours}h.png"
 
 
 def _window_stats(cut: str) -> dict:
@@ -260,11 +264,14 @@ def _window_stats(cut: str) -> dict:
 
 
 @app.get("/stats")
-def stats(request: Request, limit: int = 60):
+def stats(request: Request, limit: int = 60, hours: int = 24):
+    if hours not in {h for h, _ in statsplot.WINDOW_PRESETS}:
+        hours = 24
+    png = _stats_png(hours)
     try:
-        if (not STATS_PNG.exists()
-                or time.time() - STATS_PNG.stat().st_mtime > STATS_TTL_S):
-            statsplot.render(DB_PATH, STATS_PNG)
+        if (not png.exists()
+                or time.time() - png.stat().st_mtime > STATS_TTL_S):
+            statsplot.render(DB_PATH, png, hours=hours)
     except Exception:  # the page must render even if charting breaks
         pass
     now = nowpanel.snapshot()
@@ -272,15 +279,19 @@ def stats(request: Request, limit: int = 60):
              " clustering_ms FROM gulp_stats ORDER BY id DESC LIMIT ?", (limit,))
     return templates.TemplateResponse(request, "funnel.html", dict(
         rows=rows, hour=_window_stats(statsplot.utc_cut(1)),
-        win=_window_stats(statsplot.utc_cut(statsplot.WINDOW_H)), now=now,
-        ts=int(time.time())))
+        win=_window_stats(statsplot.utc_cut(hours)), now=now,
+        hours=hours, win_label=statsplot.window_label(hours),
+        presets=statsplot.WINDOW_PRESETS, ts=int(time.time())))
 
 
 @app.get("/stats/plot.png")
-def stats_plot():
-    if not STATS_PNG.exists():
-        return RedirectResponse("/stats")
-    return FileResponse(STATS_PNG, headers={"Cache-Control": "no-cache"})
+def stats_plot(hours: int = 24):
+    if hours not in {h for h, _ in statsplot.WINDOW_PRESETS}:
+        hours = 24
+    png = _stats_png(hours)
+    if not png.exists():
+        return RedirectResponse(f"/stats?hours={hours}")
+    return FileResponse(png, headers={"Cache-Control": "no-cache"})
 
 
 INJ_PLOT_DIR = CANDIDATES_DIR / "injections"
