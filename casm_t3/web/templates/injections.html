@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% block content %}
 <h2>Injections</h2>
-<p class="muted">last 24 h: {{ day['n'] }} injected, {{ day['done'] }} fully recovered —
+<p class="muted">last 24 h: {{ day['n'] }} injected, {{ day['done'] }} reconciled —
 T1 {{ day['t1'] }}/{{ day['done'] }} · T2 {{ day['t2'] }}/{{ day['done'] }} ·
 trigger-eligible {{ day['tr'] }}/{{ day['done'] }}</p>
 <img src="/injections/snr.png?ts={{ ts }}" style="max-width:1150px;border:none">

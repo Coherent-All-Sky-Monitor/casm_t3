@@ -313,9 +313,12 @@ def injections(request: Request, limit: int = 200):
     rows = q("SELECT i.*, c.name AS event_name FROM injections i"
              " LEFT JOIN clusters c ON c.id = i.matched_cluster"
              " ORDER BY i.id DESC LIMIT ?", (limit,))
+    # NB datetime('now',...) renders a space-separated string that mis-sorts
+    # against the DB's ISO 'T' timestamps (' ' < 'T'), silently pulling in
+    # stale rows -- always build the cutoff with statsplot.utc_cut().
     day = q("SELECT count(*) n, sum(gate_t1) t1, sum(gate_t2) t2,"
             " sum(gate_trigger) tr, count(gate_t1) done FROM injections"
-            " WHERE inject_utc > datetime('now', '-1 day')")
+            " WHERE inject_utc > ?", (statsplot.utc_cut(24),))
     inj_plots = ({p.stem for p in INJ_PLOT_DIR.glob("*.png")}
                  if INJ_PLOT_DIR.exists() else set())
     return templates.TemplateResponse(request, "injections.html",
