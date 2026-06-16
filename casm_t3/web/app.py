@@ -127,7 +127,7 @@ def friendly_outcome(action: str, detail: str) -> str:
 
 
 @app.get("/")
-def index(request: Request, tier: str = "", tag: str = "", limit: int = 500,
+def index(request: Request, tier: str = "", tag: str = "", limit: int = 5000,
           view: str = "candidates"):
     where, args = ["name IS NOT NULL"], []
     if view != "all" and not tag:
