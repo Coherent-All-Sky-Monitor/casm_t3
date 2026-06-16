@@ -39,6 +39,13 @@ WINDOW_H = 24.0  # default rolling chart window
 WINDOW_PRESETS = [(12, "12 h"), (24, "24 h"), (48, "48 h"), (168, "1 week"),
                   (720, "1 month")]
 
+# The beam-vs-time panel plots only events at/above this S/N -- the t2d
+# tier-B trigger floor -- so it shows what would actually fire, not the full
+# stored population (DB storage floor is S/N ~12, which buries the panel in
+# marginal noise on a reduced-aperture array). Keep in sync with tiers.B in
+# casm_t2/config/t2d.yaml (2026-06-15: raised 13 -> 18 for the 11-antenna array).
+BEAM_PANEL_SNR_MIN = 18.0
+
 
 def window_label(hours: float) -> str:
     for h, lbl in WINDOW_PRESETS:
@@ -78,9 +85,12 @@ def _fetch(db_path: str | Path, hours: float):
             " FROM triggers t JOIN clusters c ON c.name = t.candname"
             " WHERE t.action IN ('triggered', 'refused_daemon', 'failed')"
             " AND c.event_utc > ?", (cut,)).fetchall()
+        # Trigger-eligible events only (S/N >= tier-B floor); the full
+        # stored population (down to the ~S/N 12 DB floor) buries this panel.
         events = conn.execute(
             "SELECT event_utc, beam, dm FROM clusters"
-            " WHERE name IS NOT NULL AND event_utc > ?", (cut,)).fetchall()
+            " WHERE name IS NOT NULL AND snr >= ? AND event_utc > ?",
+            (BEAM_PANEL_SNR_MIN, cut)).fetchall()
     finally:
         conn.close()
     return gulps, attempts, events
@@ -177,9 +187,9 @@ def render(db_path: str | Path, out_png: Path, hours: float = WINDOW_H) -> Path:
     ax_lag.set_ylim(0, max([RING_LOOKBACK_S * 1.3]
                            + [a[2] * 1.15 for a in attempts if a[2]]))
 
-    # Beam occupancy of T2 stored events (the clusters table), coloured
-    # by DM: RFI storms light up beam blocks at low DM, a transiting
-    # source draws a compact track.
+    # Beam occupancy of trigger-eligible events (clusters at/above the
+    # tier-B S/N floor), coloured by DM: RFI storms light up beam blocks at
+    # low DM, a transiting source draws a compact track.
     if events:
         et = [datetime.fromisoformat(e[0]) for e in events]
         eb = np.array([e[1] for e in events], dtype=float)
@@ -195,10 +205,11 @@ def render(db_path: str | Path, out_png: Path, hours: float = WINDOW_H) -> Path:
         for edge in range(64, 512, 64):
             ax_beam.axhline(edge, color="0.85", lw=0.4, zorder=0)
     else:
-        ax_beam.text(0.5, 0.5, "no stored events in window", ha="center",
-                     va="center", transform=ax_beam.transAxes, color="0.4",
-                     fontsize=9)
-    ax_beam.set_ylabel("beam (T2 stored events)")
+        ax_beam.text(0.5, 0.5,
+                     f"no events >= S/N {BEAM_PANEL_SNR_MIN:.0f} in window",
+                     ha="center", va="center", transform=ax_beam.transAxes,
+                     color="0.4", fontsize=9)
+    ax_beam.set_ylabel(f"beam (events S/N >= {BEAM_PANEL_SNR_MIN:.0f})")
     ax_beam.set_ylim(-5, 516)
 
     for ax in axes:
