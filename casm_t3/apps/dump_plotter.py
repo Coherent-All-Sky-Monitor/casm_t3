@@ -142,6 +142,19 @@ def process_card(card_path: Path, args: argparse.Namespace) -> None:
                 logger.warning("could not delete %s: %s", f, exc)
 
 
+def _mark(card_path: Path, suffix: str) -> None:
+    """Rename a spool card to its .done/.failed marker.
+
+    Tolerates the card having been removed externally mid-flight (operator
+    archiving the spool): one missing card must not stop the polling loop.
+    """
+    try:
+        card_path.rename(card_path.with_suffix(suffix))
+    except FileNotFoundError:
+        logger.warning("card %s vanished before it could be marked %s",
+                       card_path.name, suffix)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Plot and alert on fresh beam dumps")
     p.add_argument("--spool", default=t2_beams.T2_SPOOL_DIR)
@@ -169,9 +182,9 @@ def main() -> None:
                 process_card(card_path, args)
             except Exception as exc:  # noqa: BLE001 - one bad card must not stop the loop
                 logger.exception("failed on %s: %s", card_path.name, exc)
-                card_path.rename(card_path.with_suffix(".json.failed"))
+                _mark(card_path, ".json.failed")
             else:
-                card_path.rename(card_path.with_suffix(".json.done"))
+                _mark(card_path, ".json.done")
         time.sleep(args.poll)
 
 
