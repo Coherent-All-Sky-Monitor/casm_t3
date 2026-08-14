@@ -6,8 +6,9 @@ width {{ '%.1f' % (2 ** ev['width'] * 1.048576) }} ms · beam {{ ev['beam'] }} (
 <form method="post" action="/event/{{ ev['name'] }}/label">
  {% for c in label_choices %}<button name="label" value="{{ c }}">{{ c }}</button> {% endfor %}
  notes <input name="notes" size="40">
+ your name <input name="who" size="12" placeholder="who">
 </form>
-{% if labels %}<p>{% for l in labels %}<span class="tag lbl-{{ l['label'] }}">{{ l['label'] }} ({{ l['created_utc'][:16] }}) {{ l['notes'] }}</span>{% endfor %}</p>{% endif %}
+{% if labels %}<p>{% for l in labels %}<span class="tag lbl-{{ l['label'] }}">{{ l['label'] }} — {{ l['who'] }} ({{ l['created_utc'][:16] }}) {{ l['notes'] }}</span>{% endfor %}</p>{% endif %}
 {% for p in pngs %}<img src="/event/{{ ev['name'] }}/plot/{{ p }}">{% endfor %}
 {% if triggers %}<h3>Triggers</h3><table><tr><th>kind</th><th>action</th><th class="l">detail</th><th>window</th><th>cleaned</th></tr>
 {% for t in triggers %}<tr><td>{{ t['kind'] }}</td><td>{{ t['action'] }}</td>

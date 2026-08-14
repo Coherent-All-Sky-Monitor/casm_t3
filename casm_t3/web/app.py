@@ -223,11 +223,15 @@ def plot(name: str, fname: str):
 
 
 @app.post("/event/{name}/label")
-def label(name: str, label: str = Form(...), notes: str = Form("")):
+def label(name: str, label: str = Form(...), notes: str = Form(""),
+          who: str = Form("")):
     if label in LABELS:
         now = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        # 'who' is the labeller's name typed in the form; the old rows'
+        # constant "web" stays the anonymous default.
+        who = who.strip()[:40] or "web"
         q_write("INSERT INTO labels (name, label, who, notes, created_utc)"
-                " VALUES (?,?,?,?,?)", (name, label, "web", notes, now))
+                " VALUES (?,?,?,?,?)", (name, label, who, notes, now))
         if label == "frb":
             ev = q("SELECT * FROM clusters WHERE name = ?", (name,))
             if ev:

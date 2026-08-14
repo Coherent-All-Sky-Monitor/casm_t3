@@ -26,7 +26,7 @@ from pathlib import Path
 from casm_t2 import beams as t2_beams
 from casm_t2 import logsetup
 
-from casm_t3 import alerts, dump_reader, plotting
+from casm_t3 import dump_reader, plotting
 
 logger = logging.getLogger("t3.dump_plotter")
 
@@ -125,12 +125,8 @@ def process_card(card_path: Path, args: argparse.Namespace) -> None:
     result_json.write_text(json.dumps(result, indent=2))
 
     ship_artifacts([png, result_json], candname, args.archive_host, args.archive_dir)
-    alerts.post_candidate(
-        png,
-        f"*{card['source']}* single-pulse candidate `{candname}`: "
-        f"S/N {card['snr']:.1f}, DM {card['dm']:.2f}, beam {card['beam']}, "
-        f"width {2 ** int(card['width'])} samp ({LOCAL_HOSTNAME})",
-        channel=args.slack_channel)
+    # Slack posting moved to t3-collect on corr1 (2026-08-13): corr2 has no
+    # internet, so the single poster watches the corr1 archive instead.
 
     if delete_after:
         for f in files:
@@ -161,7 +157,6 @@ def main() -> None:
     p.add_argument("--plots-dir", default="/mnt/nvme4/data/casm/t3_plots")
     p.add_argument("--archive-host", default="casm-corr1")
     p.add_argument("--archive-dir", default="/mnt/nvme5/casm_pipeline/candidates")
-    p.add_argument("--slack-channel", default="casm-alerts")
     p.add_argument("--dump-timeout", type=float, default=180.0)
     p.add_argument("--poll", type=float, default=2.0)
     p.add_argument("--log-file", default=None,

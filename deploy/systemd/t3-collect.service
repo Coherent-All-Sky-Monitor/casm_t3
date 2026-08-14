@@ -1,11 +1,13 @@
 [Unit]
-Description=CASM T3 artifact collector (rsync pull from corr2)
+Description=CASM T3 artifact collector + Slack poster (corr1)
 After=network-online.target
 
 [Service]
-ExecStart=/bin/bash -c 'while true; do rsync -a casm-corr2:/mnt/nvme4/data/casm/t3_artifacts/ /mnt/nvme5/casm_pipeline/candidates/; sleep 20; done'
+ExecStart=/home/casm/software/dev/casm_venvs/casm_offline_env/bin/t3-collect --log-file /mnt/nvme5/casm_pipeline/logs/t3_collect.log
 Restart=always
 RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=default.target
