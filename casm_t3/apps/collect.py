@@ -76,8 +76,12 @@ def _post_new(candidates: Path, web_base: str, max_age_h: float) -> None:
         except (OSError, ValueError) as exc:
             logger.warning("unreadable %s: %s", meta_json, exc)
             continue                 # retry next cycle; maybe mid-copy
-        if alerts.post_candidate(png, _caption(meta, web_base)):
-            marker.write_text(f"posted {stamp}\n")
+        res = alerts.post_candidate(png, _caption(meta, web_base))
+        if res:
+            # res is the Slack message ts when resolvable (True otherwise);
+            # keeping it makes the post editable/threadable later.
+            ts = res if isinstance(res, str) else "unknown"
+            marker.write_text(f"posted {stamp} ts={ts}\n")
         # on failure: no marker, retried next cycle (fail-soft)
 
 

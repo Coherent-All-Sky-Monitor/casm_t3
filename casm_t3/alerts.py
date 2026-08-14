@@ -129,7 +129,37 @@ def post_candidate(png_path: str | Path, text: str,
                          d3.get("error"))
             return False
         logger.info("posted %s to %s", png.name, channel)
-        return True
+        return _share_ts(d1["file_id"], channel, auth) or True
     except Exception as exc:  # noqa: BLE001 - alerting is strictly best-effort
         logger.error("slack post failed: %s", exc)
         return False
+
+
+def _share_ts(file_id: str, channel: str, auth: dict,
+              timeout_s: float = 10.0) -> str | None:
+    """Message ts of the file's share into ``channel`` (DSA post-map trick).
+
+    Slack materialises the upload->message share asynchronously; poll
+    files.info briefly. Needs the files:read scope (granted 2026-08-13);
+    returns None on timeout or missing scope — the post itself already
+    succeeded, the caller just loses later editability for this one.
+    """
+    import time as _time
+    import requests
+    deadline = _time.monotonic() + timeout_s
+    while _time.monotonic() < deadline:
+        try:
+            d = requests.get(f"{_SLACK_API}/files.info", headers=auth,
+                             params={"file": file_id}, timeout=_TIMEOUT_S).json()
+        except Exception:  # noqa: BLE001
+            return None
+        if d.get("ok"):
+            shares = (d.get("file") or {}).get("shares") or {}
+            for vis in ("public", "private"):
+                entries = (shares.get(vis) or {}).get(channel)
+                if entries and entries[0].get("ts"):
+                    return entries[0]["ts"]
+        elif d.get("error") == "missing_scope":
+            return None
+        _time.sleep(1.0)
+    return None
