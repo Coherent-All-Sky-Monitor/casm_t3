@@ -3,6 +3,10 @@ Description=CASM T3 artifact collector + Slack poster (corr1)
 After=network-online.target
 
 [Service]
+# Slack lives on the far side of the zapdos proxy; systemd units do
+# not inherit the login shell's proxy env. rsync (ssh) is unaffected.
+Environment=https_proxy=http://10.70.0.1:8118
+Environment=http_proxy=http://10.70.0.1:8118
 ExecStart=/home/casm/software/dev/casm_venvs/casm_offline_env/bin/t3-collect --log-file /mnt/nvme5/casm_pipeline/logs/t3_collect.log
 Restart=always
 RestartSec=5
