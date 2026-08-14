@@ -47,14 +47,12 @@ def _rsync(remote: str, dest: Path) -> None:
 
 
 def _caption(meta: dict, web_base: str) -> str:
+    """DSA-110 card style: *name* — 12.9σ, DM 239.7 pc cm⁻³, <UTC> UTC."""
     name = meta.get("candname", "?")
-    utc = str(meta.get("event_utc", ""))[:19]
-    return (f"*{meta.get('source', '?')}* candidate `{name}`: "
-            f"S/N {meta.get('snr', 0):.1f}, DM {meta.get('dm', 0):.2f}, "
-            f"beam {meta.get('beam', '?')}, "
-            f"width {2 ** int(meta.get('width', 0))} samp, {utc} UTC "
-            f"({meta.get('trigger_reason', '?')}, {meta.get('host', '?')}) | "
-            f"{web_base}/event/{name}")
+    utc = str(meta.get("event_utc", "")).replace("T", " ")[:19]
+    return (f"*{name}* — {meta.get('snr', 0):.1f}σ, "
+            f"DM {meta.get('dm', 0):.1f} pc cm⁻³, {utc} UTC | "
+            f"<{web_base}/event/{name}|Open in dashboard>")
 
 
 def _post_new(candidates: Path, web_base: str, max_age_h: float) -> None:
