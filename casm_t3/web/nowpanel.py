@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from ..skypos import OVRO_ALT_M, OVRO_LAT_DEG, OVRO_LON_DEG
+from casm_t2.weights_registry import OVRO_ALT_M, OVRO_LAT_DEG, OVRO_LON_DEG
 
 SIDEREAL_RATE = 1.00273790935  # sidereal / solar time
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=CASM T3 weights watch: records bfcorr weights reloads in the weights registry (corr1 watches both nodes)
+After=network-online.target
+
+[Service]
+ExecStart=/home/casm/software/dev/casm_venvs/casm_offline_env/bin/t3-weights-watch --log-file /mnt/nvme5/casm_pipeline/logs/t3_weights_watch.log
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
