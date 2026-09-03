@@ -154,7 +154,7 @@ def _sky_panel(ax, members: np.ndarray, card: dict, pointings: dict | None,
                                alpha=0.3, label=f"{name} (set)")
             handles.append(h)
         if handles:
-            ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.80, 1.10), fontsize=8.5,
+            ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.86, 1.10), fontsize=8.5,
                       frameon=False, labelspacing=0.9, handletextpad=0.6)
     elif sky.get("sun_alt_deg") is not None and sky["sun_alt_deg"] > 0:
         ax.scatter(np.radians(sky["sun_az_deg"]), 90 - sky["sun_alt_deg"], marker="*", s=170,
