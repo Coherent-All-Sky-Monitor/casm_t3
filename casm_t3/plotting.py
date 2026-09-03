@@ -202,8 +202,12 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     window_s = float(ctx.get("window_s", 4.0))
     dm_norm = mcolors.Normalize(vmin=15.0, vmax=max(60.0, 1.5 * dm, float(np.percentile(members[:, 2], 95)) if members.size else 0.0))
     sky = card.get("sky") or {}
-    reg = registry or weights_registry.default_registry()
-    pointings = reg.product(sky.get("weights_id")) if sky.get("weights_id") else None
+    # pointing table: from the card itself (t2d embeds the live weights' table so
+    # corr2, which has no registry, can plot); registry only as a fallback
+    pointings = card.get("pointings") if (card.get("pointings") or {}).get("alt_deg") else None
+    if pointings is None and sky.get("weights_id"):
+        reg = registry or weights_registry.default_registry()
+        pointings = reg.product(sky.get("weights_id"))
 
     plt.rcParams.update({"font.size": 10.5, "axes.titlesize": 11, "axes.labelsize": 11,
                          "xtick.labelsize": 10, "ytick.labelsize": 10})
