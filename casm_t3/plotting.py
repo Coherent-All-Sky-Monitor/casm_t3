@@ -41,7 +41,7 @@ COINCIDENCE_S = 256 * 1.048576e-3     # casm_t2 occupancy window_samp 256
 WATERFALL_CMAP = "viridis"    # Vishnu 2026-09-03: viridis over inferno on the image panels
 # The legacy (live) layout keeps its transientX look until the v2 layout is approved.
 LEGACY_CMAP = "viridis"
-SHOW_SOURCES = False   # sun, Cas A, Cyg A, Tau A markers + legend on the sky panel (pending approval)
+SHOW_SOURCES = True    # sun, Cas A, Cyg A, Tau A markers + legend on the sky panel (approved by Vishnu 2026-09-03)
 DEFAULT_LAYOUT = "v2"       # approved by Vishnu 2026-09-03: unified layout with sky footprint is what Slack posts
 # DM colour scale for the member panels: plasma with the bright top cut off,
 # unreadable otherwise on a white panel.
