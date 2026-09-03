@@ -237,11 +237,13 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
 
     plt.rcParams.update({"font.size": 10.5, "axes.titlesize": 11, "axes.labelsize": 11,
                          "xtick.labelsize": 10, "ytick.labelsize": 10})
-    fig = plt.figure(figsize=(13, 12.5))
+    # Fixed canvas 1510 x 1517 px at 120 dpi (the framing of 260903bembjy, approved):
+    # every Slack post has identical pixel size, so previews render at one width.
+    fig = plt.figure(figsize=(1510 / 120, 1517 / 120))
     # two equal columns; colour bars hang outside their axes as insets so the
     # right-hand panels keep the same width as the left-hand ones
     gs = fig.add_gridspec(3, 2, height_ratios=(0.85, 1.75, 1.5), hspace=0.38, wspace=0.28,
-                          left=0.065, right=0.885, top=0.91, bottom=0.085)
+                          left=0.06, right=0.885, top=0.915, bottom=0.06)
     ax_prof = fig.add_subplot(gs[0, 0]); ax_dm0 = fig.add_subplot(gs[0, 1])
     ax_wf = fig.add_subplot(gs[1, 0]); ax_dmt = fig.add_subplot(gs[1, 1])
     ax_bt = fig.add_subplot(gs[2, 0])
