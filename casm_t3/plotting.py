@@ -295,7 +295,7 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     _sky_panel(ax_sky, members, card, pointings, dm_norm, floor)
     if sc is not None:
         p = cb.ax.get_position()
-        cax = fig.add_axes([p.x0, bt.y0 + 0.03, p.width, bt.height - 0.06])
+        cax = fig.add_axes([p.x0, bt.y0 + 0.02, p.width, bt.height - 0.12])   # leaves room for the source legend above
         fig.colorbar(sc, cax=cax).set_label(r"DM (pc cm$^{-3}$)")
 
     source = "" if card.get("source", "blind") == "blind" else f"{card.get('source')}   "
