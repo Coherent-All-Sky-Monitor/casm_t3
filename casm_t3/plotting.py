@@ -247,7 +247,7 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
         f"S/N = {card['snr']:.1f}   DM = {dm:.2f} pc cm$^{{-3}}$   width = {width * tsamp_s * 1e3:.1f} ms",
         _coord_line(card, tsamp_s),
     ]
-    fig.suptitle("\n".join(lines), y=0.975, fontsize=13.5)
+    fig.suptitle("\n".join(lines), y=0.975, fontsize=12)
     out_png = Path(out_png)
     out_png.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_png, dpi=120, bbox_inches="tight")
