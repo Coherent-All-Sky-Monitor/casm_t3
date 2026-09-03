@@ -103,9 +103,9 @@ def _sky_panel(ax, members: np.ndarray, card: dict, pointings: dict | None,
     weights live at the event are unknown (panel then says so and draws nothing)."""
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
-    ax.set_rlim(0, 90)                         # edge = horizon, so low sources still show
-    ax.set_yticks([30, 60, 90])
-    ax.set_yticklabels(["alt 60", "30", "0"], fontsize=9, color="#555555")
+    ax.set_rlim(0, 72)                         # edge just below the beam-grid floor (alt ~20)
+    ax.set_yticks([20, 40, 60])
+    ax.set_yticklabels(["alt 70", "50", "30"], fontsize=9, color="#555555")
     ax.set_xticks(np.radians([0, 90, 180, 270]))
     ax.set_xticklabels(["N", "E", "S", "W"])
     ax.tick_params(axis="x", pad=6)
@@ -116,10 +116,6 @@ def _sky_panel(ax, members: np.ndarray, card: dict, pointings: dict | None,
         return None
     alt = np.asarray(pointings["alt_deg"]); az = np.asarray(pointings["az_deg"])
     ax.scatter(np.radians(az), 90 - alt, s=5, color="#d0d0d0", zorder=1)
-    # dashed ring at the beam-grid floor: below it a source is in no beam but
-    # still enters through sidelobes and the incoherent beam
-    th = np.linspace(0, 2 * np.pi, 361)
-    ax.plot(th, np.full_like(th, 90 - alt.min()), ls="--", lw=0.8, color="#999999", zorder=1)
     best: dict[int, tuple[float, float]] = {}
     if members.size:
         near = members[np.abs(members[:, 0]) <= COINCIDENCE_S]
@@ -142,20 +138,23 @@ def _sky_panel(ax, members: np.ndarray, card: dict, pointings: dict | None,
         style = {"Sun": ("*", "#f4a300", 190), "Cas A": ("P", "#2e86c1", 110),
                  "Cyg A": ("X", "#27ae60", 110), "Tau A": ("D", "#8e44ad", 80)}
         handles = []
+        floor_alt = 90 - ax.get_rmax()
         for name, (m, col, size) in style.items():
             if name not in srcs:
                 continue
             s_alt, s_az = srcs[name]
-            up = s_alt > 0
-            h = ax.scatter(np.radians(s_az) if up else [], 90 - s_alt if up else [], marker=m, s=size,
-                           color=col, edgecolors="k", linewidths=0.5, zorder=5,
-                           label=name if up else f"{name} (below horizon)")
-            if not up:
+            if s_alt >= floor_alt:                       # inside the drawn sky: plot it
+                h = ax.scatter(np.radians(s_az), 90 - s_alt, marker=m, s=size, color=col,
+                               edgecolors="k", linewidths=0.5, zorder=5, label=name)
+            elif s_alt > 0:                              # up, but below the beam grid: say so
                 h = ax.scatter([], [], marker=m, s=size, color=col, edgecolors="k", linewidths=0.5,
-                               alpha=0.35, label=f"{name} (below horizon)")
+                               alpha=0.6, label=f"{name} (alt {s_alt:.0f}\N{DEGREE SIGN}, below beams)")
+            else:
+                h = ax.scatter([], [], marker=m, s=size, color=col, edgecolors="k", linewidths=0.5,
+                               alpha=0.3, label=f"{name} (below horizon)")
             handles.append(h)
         if handles:
-            ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.98, 1.10), fontsize=9,
+            ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.84, 1.10), fontsize=9,
                       frameon=False, labelspacing=0.9, handletextpad=0.6)
     elif sky.get("sun_alt_deg") is not None and sky["sun_alt_deg"] > 0:
         ax.scatter(np.radians(sky["sun_az_deg"]), 90 - sky["sun_alt_deg"], marker="*", s=170,
