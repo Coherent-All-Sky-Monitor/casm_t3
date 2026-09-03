@@ -191,8 +191,10 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
                          "xtick.labelsize": 10, "ytick.labelsize": 10})
     fig = plt.figure(figsize=(13, 12.5))
     gs = fig.add_gridspec(3, 12, height_ratios=(1.0, 1.5, 1.45), hspace=0.55, wspace=1.6, top=0.895)
-    ax_prof = fig.add_subplot(gs[0, 0:6]); ax_dm0 = fig.add_subplot(gs[0, 6:12])
-    ax_wf = fig.add_subplot(gs[1, 0:6]); ax_dmt = fig.add_subplot(gs[1, 6:12])
+    # column 6 stays empty as a gutter so the right column's y-labels never
+    # touch the left column's frames
+    ax_prof = fig.add_subplot(gs[0, 0:6]); ax_dm0 = fig.add_subplot(gs[0, 7:12])
+    ax_wf = fig.add_subplot(gs[1, 0:6]); ax_dmt = fig.add_subplot(gs[1, 7:12])
     ax_bt = fig.add_subplot(gs[2, 0:7])
     ax_sky = fig.add_subplot(gs[2, 7:12], projection="polar")
     ax_sky.set_position([0.565, 0.075, 0.30, 0.245])
