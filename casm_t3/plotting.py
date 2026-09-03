@@ -41,6 +41,7 @@ COINCIDENCE_S = 256 * 1.048576e-3     # casm_t2 occupancy window_samp 256
 WATERFALL_CMAP = "viridis"    # Vishnu 2026-09-03: viridis over inferno on the image panels
 # The legacy (live) layout keeps its transientX look until the v2 layout is approved.
 LEGACY_CMAP = "viridis"
+SHOW_SOURCES = False   # sun, Cas A, Cyg A, Tau A markers + legend on the sky panel (pending approval)
 DEFAULT_LAYOUT = "v2"       # approved by Vishnu 2026-09-03: unified layout with sky footprint is what Slack posts
 # DM colour scale for the member panels: plasma with the bright top cut off,
 # unreadable otherwise on a white panel.
@@ -130,7 +131,29 @@ def _sky_panel(ax, members: np.ndarray, card: dict, pointings: dict | None,
     ax.scatter(np.radians(az[beam]), 90 - alt[beam], s=230, facecolors="none",
                edgecolors="#c0392b", linewidths=1.5, zorder=4)
     sky = card.get("sky") or {}
-    if sky.get("sun_alt_deg") is not None and sky["sun_alt_deg"] > 0:
+    if SHOW_SOURCES:
+        srcs = dict(sky.get("sources") or {})
+        if not srcs and sky.get("sun_alt_deg") is not None:
+            srcs["Sun"] = (sky["sun_alt_deg"], sky["sun_az_deg"])
+        style = {"Sun": ("*", "#f4a300", 190), "Cas A": ("P", "#2e86c1", 110),
+                 "Cyg A": ("X", "#27ae60", 110), "Tau A": ("D", "#8e44ad", 80)}
+        handles = []
+        for name, (m, col, size) in style.items():
+            if name not in srcs:
+                continue
+            s_alt, s_az = srcs[name]
+            up = s_alt > 0
+            h = ax.scatter(np.radians(s_az) if up else [], 90 - s_alt if up else [], marker=m, s=size,
+                           color=col, edgecolors="k", linewidths=0.5, zorder=5,
+                           label=name if up else f"{name} (below horizon)")
+            if not up:
+                h = ax.scatter([], [], marker=m, s=size, color=col, edgecolors="k", linewidths=0.5,
+                               alpha=0.35, label=f"{name} (set)")
+            handles.append(h)
+        if handles:
+            ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(-0.32, 1.08), fontsize=9,
+                      frameon=False, labelspacing=0.9, handletextpad=0.6)
+    elif sky.get("sun_alt_deg") is not None and sky["sun_alt_deg"] > 0:
         ax.scatter(np.radians(sky["sun_az_deg"]), 90 - sky["sun_alt_deg"], marker="*", s=170,
                    color="#f4a300", edgecolors="k", linewidths=0.5, zorder=5)
     n_lit = len(best)
