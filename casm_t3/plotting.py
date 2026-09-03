@@ -171,10 +171,10 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     tfactor = max(1, width // 2)
     wf_dd = single_pulse.downsample(dedis, ffactor, tfactor)
     prof_dd = wf_dd.mean(axis=0)
-    # Waterfall pixels: 64 sub-bands x one boxcar width. A pulse of total S/N 17
-    # over 3072 channels is ~0.8 sigma per pixel at 8 channels x half a boxcar;
-    # at 48 channels x a full boxcar it is ~2 sigma and visible.
-    ffactor_wf = 48
+    # Waterfall pixels: 16 channels x one boxcar width. A pulse of total S/N 17
+    # over 3072 channels is ~0.9 sigma per pixel at 8 channels whatever the time
+    # averaging; at 16 channels it is ~1.2 sigma and reads as a coherent line.
+    ffactor_wf = 16
     tfactor_wf = max(1, width)
     wf_show = single_pulse.downsample(dedis, ffactor_wf, tfactor_wf)
     t_show = (np.arange(wf_show.shape[1]) * tfactor_wf + tfactor_wf / 2) * tsamp_s - t_rel_event_s
@@ -208,14 +208,17 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     plt.rcParams.update({"font.size": 10.5, "axes.titlesize": 11, "axes.labelsize": 11,
                          "xtick.labelsize": 10, "ytick.labelsize": 10})
     fig = plt.figure(figsize=(13, 12.5))
-    gs = fig.add_gridspec(3, 12, height_ratios=(1.0, 1.5, 1.45), hspace=0.55, wspace=1.6, top=0.895)
+    gs = fig.add_gridspec(3, 12, height_ratios=(0.85, 1.75, 1.5), hspace=0.38, wspace=1.6,
+                          top=0.905, bottom=0.05)
     # column 6 stays empty as a gutter so the right column's y-labels never
     # touch the left column's frames
     ax_prof = fig.add_subplot(gs[0, 0:6]); ax_dm0 = fig.add_subplot(gs[0, 7:12])
     ax_wf = fig.add_subplot(gs[1, 0:6]); ax_dmt = fig.add_subplot(gs[1, 7:12])
     ax_bt = fig.add_subplot(gs[2, 0:7])
     ax_sky = fig.add_subplot(gs[2, 7:12], projection="polar")
-    ax_sky.set_position([0.565, 0.075, 0.30, 0.245])
+    # place the sky panel on the members panel's row, same height, right column
+    bt = ax_bt.get_position()
+    ax_sky.set_position([0.585, bt.y0 - 0.005, 0.30, bt.height + 0.01])
 
     ax_prof.plot(t_wf, prof_dd, "k-", lw=1.0)
     ax_prof.axvline(0, color="#c0392b", alpha=0.8, lw=0.9)
@@ -235,7 +238,7 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     sigma = 1.4826 * np.median(np.abs(wf_show - med)) or (wf_show.std() or 1.0)
     ax_wf.imshow(wf_show, aspect="auto", interpolation="nearest",
                  extent=[t_show[0], t_show[-1], freqs_mhz[-1], freqs_mhz[0]],
-                 vmin=med - 1.5 * sigma, vmax=med + 4 * sigma, cmap=WATERFALL_CMAP)
+                 vmin=med - 1.5 * sigma, vmax=med + 3.5 * sigma, cmap=WATERFALL_CMAP)
     ax_wf.set_xlim(xlim_prof)
     ax_wf.set_ylabel("frequency (MHz)")
     ax_wf.set_xlabel("time - event (s)")
@@ -257,7 +260,7 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     _sky_panel(ax_sky, members, card, pointings, dm_norm, floor)
     if sc is not None:
         p = cb.ax.get_position()
-        cax = fig.add_axes([p.x0, 0.10, p.width, 0.22])
+        cax = fig.add_axes([p.x0, bt.y0 + 0.02, p.width, bt.height - 0.04])
         fig.colorbar(sc, cax=cax).set_label(r"DM (pc cm$^{-3}$)")
 
     source = "" if card.get("source", "blind") == "blind" else f"{card.get('source')}   "
@@ -266,7 +269,7 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
         f"S/N = {card['snr']:.1f}   DM = {dm:.2f} pc cm$^{{-3}}$   width = {width * tsamp_s * 1e3:.1f} ms",
         _coord_line(card, tsamp_s),
     ]
-    fig.suptitle("\n".join(lines), y=0.975, fontsize=12)
+    fig.suptitle("\n".join(lines), y=0.985, fontsize=12)
     out_png = Path(out_png)
     out_png.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_png, dpi=120, bbox_inches="tight")
