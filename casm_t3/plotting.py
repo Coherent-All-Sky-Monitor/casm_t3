@@ -74,7 +74,12 @@ def _member_panel(ax, members: np.ndarray, card: dict, window_s: float,
     ax.set_yticks(np.arange(0, NBEAM_TOTAL + 1, 64))
     ax.set_xlabel("time - event (s)")
     ax.set_ylabel("beam")
-    ax.set_title(f"T1 candidates within \N{PLUS-MINUS SIGN}{window_s:g} s of the event (size = S/N)")
+    ax.set_title(f"T1 candidates within \N{PLUS-MINUS SIGN}{window_s:g} s of the event")
+    # size legend: three reference S/N values on the same scale as the markers
+    handles = [ax.scatter([], [], s=_snr_size(np.array([v]))[0], color="0.45", alpha=0.85, linewidths=0,
+                          label=f"S/N {v}") for v in (15, 25, 40)]
+    ax.legend(handles=handles, loc="upper left", title="marker size", fontsize=9, title_fontsize=9,
+              frameon=False, labelspacing=1.4, borderpad=0.6, handletextpad=1.2)
     return sc
 
 
