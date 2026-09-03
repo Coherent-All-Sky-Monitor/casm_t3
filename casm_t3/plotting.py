@@ -139,6 +139,66 @@ def _sky_panel(ax, members: np.ndarray, card: dict, pointings: dict | None,
     return n_lit
 
 
+def _tangent_xy(alt_deg, az_deg, alt0, az0):
+    """Gnomonic offsets (deg) of points from a centre: x east, y north."""
+    a, z = np.radians(alt_deg), np.radians(az_deg)
+    a0, z0 = np.radians(alt0), np.radians(az0)
+    p = np.stack([np.cos(a) * np.sin(z), np.cos(a) * np.cos(z), np.sin(a)], -1)   # E, N, up
+    c = np.array([np.cos(a0) * np.sin(z0), np.cos(a0) * np.cos(z0), np.sin(a0)])
+    e = np.array([np.cos(z0), -np.sin(z0), 0.0])
+    n = np.cross(c, e)
+    d = p @ c
+    with np.errstate(divide="ignore", invalid="ignore"):
+        x = np.degrees((p @ e) / d)
+        y = np.degrees((p @ n) / d)
+    x[d <= 0] = np.nan; y[d <= 0] = np.nan
+    return x, y
+
+
+def _zoom_panel(ax, members: np.ndarray, card: dict, pointings: dict | None, half_deg: float = 8.0):
+    """Tangent-plane neighbourhood of the triggered beam. Circles: every grid beam
+    at half its local spacing; lit beams filled by S/N relative to the triggered
+    beam and labelled. A point source fades with distance from the centre; RFI
+    lights beams with no pattern."""
+    ax.set_aspect("equal")
+    ax.set_xlim(half_deg, -half_deg)          # east to the left, as on the sky
+    ax.set_ylim(-half_deg, half_deg)
+    ax.set_xlabel("east offset (deg)")
+    ax.set_ylabel("north offset (deg)")
+    ax.set_title(f"neighbourhood of beam {card['beam']}")
+    if pointings is None:
+        ax.text(0.5, 0.5, "pointings unknown", ha="center", va="center", transform=ax.transAxes, color="0.4")
+        return
+    alt = np.asarray(pointings["alt_deg"]); az = np.asarray(pointings["az_deg"])
+    beam = int(card["beam"])
+    x, y = _tangent_xy(alt, az, alt[beam], az[beam])
+    best: dict[int, float] = {}
+    if members.size:
+        near = members[np.abs(members[:, 0]) <= COINCIDENCE_S]
+        for dt, b, dm, snr, w in near:
+            b = int(b)
+            if 0 <= b < NBEAM_TOTAL:
+                best[b] = max(best.get(b, 0.0), float(snr))
+    peak = max(best.values()) if best else float(card.get("snr", 1.0))
+    inside = np.where(np.isfinite(x) & (np.abs(x) < half_deg + 3) & (np.abs(y) < half_deg + 3))[0]
+    # local spacing: distance to the nearest other beam in the tangent plane
+    for b in inside:
+        dx = x[inside] - x[b]; dy = y[inside] - y[b]
+        dd = np.hypot(dx, dy); dd[inside == b] = np.inf
+        r = 0.5 * dd.min() if np.isfinite(dd.min()) else 1.0
+        if b in best:
+            frac = best[b] / peak
+            ax.add_patch(plt.Circle((x[b], y[b]), r, facecolor=plt.get_cmap(WATERFALL_CMAP)(0.15 + 0.85 * frac),
+                                    edgecolor="k", linewidth=0.6, zorder=3))
+            ax.text(x[b], y[b], f"{best[b]:.0f}", ha="center", va="center", fontsize=8,
+                    color="w" if frac < 0.6 else "k", zorder=4)
+        else:
+            ax.add_patch(plt.Circle((x[b], y[b]), r, facecolor="none", edgecolor="0.75", linewidth=0.6, zorder=2))
+    ax.add_patch(plt.Circle((0, 0), 0.5 * np.hypot(x[inside] - 0, y[inside] - 0)[np.hypot(x[inside], y[inside]) > 0].min(),
+                            facecolor="none", edgecolor="#c0392b", linewidth=1.6, zorder=5))
+    ax.grid(alpha=0.25)
+
+
 def _coord_line(card: dict, tsamp_s: float) -> str:
     sky = card.get("sky") or {}
     beam = card["beam"]
@@ -216,14 +276,16 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     ax_wf = fig.add_subplot(gs[1, 0]); ax_dmt = fig.add_subplot(gs[1, 1])
     ax_bt = fig.add_subplot(gs[2, 0])
     ax_sky = fig.add_subplot(gs[2, 1], projection="polar")
-    # bottom row: members panel wider (7:5), polar panel a square whose circle
-    # fills the row height (figure is 13 x 12.5 in, so width = height x 12.5/13)
-    bt = ax_bt.get_position(); rt = ax_dmt.get_position()
+    ax_zoom = fig.add_axes([0.7, 0.05, 0.2, 0.2])
+    # bottom row: members | full-sky footprint | tangent-plane zoom. The two sky
+    # panels are squares whose height is the row height (figure 13 x 12.5 in).
+    bt = ax_bt.get_position()
     fw, fh = fig.get_size_inches()
-    ax_bt.set_position([bt.x0, bt.y0, 0.55 - bt.x0, bt.height])
-    sky_h = bt.height + 0.04
-    sky_w = sky_h * fh / fw
-    ax_sky.set_position([0.585, bt.y0 - 0.02, sky_w, sky_h])
+    sq_h = bt.height + 0.02
+    sq_w = sq_h * fh / fw
+    ax_bt.set_position([bt.x0, bt.y0, 0.33 - bt.x0, bt.height])
+    ax_sky.set_position([0.405, bt.y0 - 0.01, sq_w, sq_h])
+    ax_zoom.set_position([0.405 + sq_w + 0.055, bt.y0, sq_w * 0.92, bt.height])
 
     ax_prof.plot(t_wf, prof_dd, "k-", lw=1.0)
     ax_prof.axvline(0, color="#c0392b", alpha=0.8, lw=0.9)
@@ -263,10 +325,10 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     floor = _snr_floor(members, card)
     sc = _member_panel(ax_bt, members, card, window_s, dm_norm, floor)
     _sky_panel(ax_sky, members, card, pointings, dm_norm, floor)
+    _zoom_panel(ax_zoom, members, card, pointings)
     if sc is not None:
-        p = cb.ax.get_position()
-        cax = fig.add_axes([p.x0, bt.y0 + 0.03, p.width, bt.height - 0.06])
-        fig.colorbar(sc, cax=cax).set_label(r"DM (pc cm$^{-3}$)")
+        # DM colour bar for the members and footprint panels, hung on the members panel
+        fig.colorbar(sc, cax=ax_bt.inset_axes((1.03, 0.0, 0.04, 1.0))).set_label(r"DM (pc cm$^{-3}$)")
 
     source = "" if card.get("source", "blind") == "blind" else f"{card.get('source')}   "
     lines = [
