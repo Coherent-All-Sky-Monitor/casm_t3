@@ -241,7 +241,7 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     # two equal columns; colour bars hang outside their axes as insets so the
     # right-hand panels keep the same width as the left-hand ones
     gs = fig.add_gridspec(3, 2, height_ratios=(0.85, 1.75, 1.5), hspace=0.38, wspace=0.28,
-                          left=0.06, right=0.90, top=0.905, bottom=0.05)
+                          left=0.065, right=0.885, top=0.91, bottom=0.085)
     ax_prof = fig.add_subplot(gs[0, 0]); ax_dm0 = fig.add_subplot(gs[0, 1])
     ax_wf = fig.add_subplot(gs[1, 0]); ax_dmt = fig.add_subplot(gs[1, 1])
     ax_bt = fig.add_subplot(gs[2, 0])
@@ -307,7 +307,7 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     fig.suptitle("\n".join(lines), y=0.985, fontsize=12)
     out_png = Path(out_png)
     out_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_png, dpi=120, bbox_inches="tight")
+    fig.savefig(out_png, dpi=120)      # fixed canvas: identical pixel size for every candidate
     plt.close(fig)
     return out_png
 
