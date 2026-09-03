@@ -74,7 +74,7 @@ def _member_panel(ax, members: np.ndarray, card: dict, window_s: float,
     ax.set_yticks(np.arange(0, NBEAM_TOTAL + 1, 64))
     ax.set_xlabel("time - event (s)")
     ax.set_ylabel("beam")
-    ax.set_title("T1 members in the dump (size = S/N)")
+    ax.set_title(f"T1 candidates within \N{PLUS-MINUS SIGN}{window_s:g} s of the event (size = S/N)")
     return sc
 
 
@@ -133,7 +133,6 @@ def _coord_line(card: dict, tsamp_s: float) -> str:
             line += f"   RA {hms}  Dec {dms}"
         except Exception:
             line += f"   RA {sky['ra_deg']:.3f}\N{DEGREE SIGN}  Dec {sky['dec_deg']:+.3f}\N{DEGREE SIGN}"
-    line += f"   weights {sky.get('weights_id', '?')}"
     return line
 
 
@@ -154,6 +153,13 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
     tfactor = max(1, width // 2)
     wf_dd = single_pulse.downsample(dedis, ffactor, tfactor)
     prof_dd = wf_dd.mean(axis=0)
+    # Waterfall pixels: 64 sub-bands x one boxcar width. A pulse of total S/N 17
+    # over 3072 channels is ~0.8 sigma per pixel at 8 channels x half a boxcar;
+    # at 48 channels x a full boxcar it is ~2 sigma and visible.
+    ffactor_wf = 48
+    tfactor_wf = max(1, width)
+    wf_show = single_pulse.downsample(dedis, ffactor_wf, tfactor_wf)
+    t_show = (np.arange(wf_show.shape[1]) * tfactor_wf + tfactor_wf / 2) * tsamp_s - t_rel_event_s
     raw_dm0 = data.mean(axis=0)
     n = (raw_dm0.size // tfactor) * tfactor
     raw_dm0 = raw_dm0[:n].reshape(-1, tfactor).mean(axis=1)
@@ -184,12 +190,12 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
     plt.rcParams.update({"font.size": 10.5, "axes.titlesize": 11, "axes.labelsize": 11,
                          "xtick.labelsize": 10, "ytick.labelsize": 10})
     fig = plt.figure(figsize=(13, 12.5))
-    gs = fig.add_gridspec(3, 12, height_ratios=(1.0, 1.5, 1.45), hspace=0.55, wspace=1.6)
+    gs = fig.add_gridspec(3, 12, height_ratios=(1.0, 1.5, 1.45), hspace=0.55, wspace=1.6, top=0.895)
     ax_prof = fig.add_subplot(gs[0, 0:6]); ax_dm0 = fig.add_subplot(gs[0, 6:12])
     ax_wf = fig.add_subplot(gs[1, 0:6]); ax_dmt = fig.add_subplot(gs[1, 6:12])
     ax_bt = fig.add_subplot(gs[2, 0:7])
     ax_sky = fig.add_subplot(gs[2, 7:12], projection="polar")
-    ax_sky.set_position([0.565, 0.085, 0.30, 0.25])
+    ax_sky.set_position([0.565, 0.075, 0.30, 0.245])
 
     ax_prof.plot(t_wf, prof_dd, "k-", lw=1.0)
     ax_prof.axvline(0, color="#c0392b", alpha=0.8, lw=0.9)
@@ -205,11 +211,11 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
     ax_dm0.set_title("DM = 0 band-mean timeseries")
     ax_dm0.set_xlim(t_wf[0], t_wf[-1])
 
-    med = np.median(wf_dd)
-    sigma = 1.4826 * np.median(np.abs(wf_dd - med)) or (wf_dd.std() or 1.0)
-    ax_wf.imshow(wf_dd, aspect="auto", interpolation="nearest",
-                 extent=[t_wf[0], t_wf[-1], freqs_mhz[-1], freqs_mhz[0]],
-                 vmin=med - sigma, vmax=med + 7 * sigma, cmap=WATERFALL_CMAP)
+    med = np.median(wf_show)
+    sigma = 1.4826 * np.median(np.abs(wf_show - med)) or (wf_show.std() or 1.0)
+    ax_wf.imshow(wf_show, aspect="auto", interpolation="nearest",
+                 extent=[t_show[0], t_show[-1], freqs_mhz[-1], freqs_mhz[0]],
+                 vmin=med - 1.5 * sigma, vmax=med + 4 * sigma, cmap=WATERFALL_CMAP)
     ax_wf.set_xlim(xlim_prof)
     ax_wf.set_ylabel("frequency (MHz)")
     ax_wf.set_xlabel("time - event (s)")
@@ -227,20 +233,19 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
     ax_dmt.set_title(f"boxcar S/N vs trial DM (w = {width})")
 
     sc = _member_panel(ax_bt, members, card, window_s, dm_norm)
-    n_lit = _sky_panel(ax_sky, members, card, pointings, dm_norm)
+    _sky_panel(ax_sky, members, card, pointings, dm_norm)
     if sc is not None:
         p = cb.ax.get_position()
         cax = fig.add_axes([p.x0, 0.10, p.width, 0.22])
         fig.colorbar(sc, cax=cax).set_label(r"DM (pc cm$^{-3}$)")
 
     source = "" if card.get("source", "blind") == "blind" else f"{card.get('source')}   "
-    foot = f"   footprint {n_lit} beams within {COINCIDENCE_S:.2f} s" if n_lit is not None else ""
     lines = [
         f"{card['candname']}   {source}{card['event_utc']}",
-        f"S/N = {card['snr']:.1f}   DM = {dm:.2f} pc cm$^{{-3}}$   width = {width * tsamp_s * 1e3:.1f} ms{foot}",
+        f"S/N = {card['snr']:.1f}   DM = {dm:.2f} pc cm$^{{-3}}$   width = {width * tsamp_s * 1e3:.1f} ms",
         _coord_line(card, tsamp_s),
     ]
-    fig.suptitle("\n".join(lines), y=0.985, fontsize=11)
+    fig.suptitle("\n".join(lines), y=0.975, fontsize=13.5)
     out_png = Path(out_png)
     out_png.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_png, dpi=120, bbox_inches="tight")
