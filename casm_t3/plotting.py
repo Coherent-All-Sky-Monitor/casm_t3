@@ -216,8 +216,14 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     ax_wf = fig.add_subplot(gs[1, 0]); ax_dmt = fig.add_subplot(gs[1, 1])
     ax_bt = fig.add_subplot(gs[2, 0])
     ax_sky = fig.add_subplot(gs[2, 1], projection="polar")
+    # bottom row: members panel wider (7:5), polar panel a square whose circle
+    # fills the row height (figure is 13 x 12.5 in, so width = height x 12.5/13)
     bt = ax_bt.get_position(); rt = ax_dmt.get_position()
-    ax_sky.set_position([rt.x0 - 0.01, bt.y0 - 0.01, rt.width + 0.02, bt.height + 0.02])
+    fw, fh = fig.get_size_inches()
+    ax_bt.set_position([bt.x0, bt.y0, 0.55 - bt.x0, bt.height])
+    sky_h = bt.height + 0.04
+    sky_w = sky_h * fh / fw
+    ax_sky.set_position([0.585, bt.y0 - 0.02, sky_w, sky_h])
 
     ax_prof.plot(t_wf, prof_dd, "k-", lw=1.0)
     ax_prof.axvline(0, color="#c0392b", alpha=0.8, lw=0.9)
