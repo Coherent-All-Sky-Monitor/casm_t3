@@ -38,7 +38,7 @@ NBEAM_TOTAL = 512
 COINCIDENCE_S = 256 * 1.048576e-3     # casm_t2 occupancy window_samp 256
 
 # Event-physics panels on inferno (casm-wiki display-conventions.md).
-WATERFALL_CMAP = "inferno"
+WATERFALL_CMAP = "viridis"    # Vishnu 2026-09-03: viridis over inferno on the image panels
 # The legacy (live) layout keeps its transientX look until the v2 layout is approved.
 LEGACY_CMAP = "viridis"
 DEFAULT_LAYOUT = "legacy"   # "legacy" (live) or "v2" (unified layout with sky footprint, under review)
@@ -208,17 +208,16 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     plt.rcParams.update({"font.size": 10.5, "axes.titlesize": 11, "axes.labelsize": 11,
                          "xtick.labelsize": 10, "ytick.labelsize": 10})
     fig = plt.figure(figsize=(13, 12.5))
-    gs = fig.add_gridspec(3, 12, height_ratios=(0.85, 1.75, 1.5), hspace=0.38, wspace=1.6,
-                          top=0.905, bottom=0.05)
-    # column 6 stays empty as a gutter so the right column's y-labels never
-    # touch the left column's frames
-    ax_prof = fig.add_subplot(gs[0, 0:6]); ax_dm0 = fig.add_subplot(gs[0, 7:12])
-    ax_wf = fig.add_subplot(gs[1, 0:6]); ax_dmt = fig.add_subplot(gs[1, 7:12])
-    ax_bt = fig.add_subplot(gs[2, 0:7])
-    ax_sky = fig.add_subplot(gs[2, 7:12], projection="polar")
-    # place the sky panel on the members panel's row, same height, right column
-    bt = ax_bt.get_position()
-    ax_sky.set_position([0.585, bt.y0 - 0.005, 0.30, bt.height + 0.01])
+    # two equal columns; colour bars hang outside their axes as insets so the
+    # right-hand panels keep the same width as the left-hand ones
+    gs = fig.add_gridspec(3, 2, height_ratios=(0.85, 1.75, 1.5), hspace=0.38, wspace=0.28,
+                          left=0.06, right=0.90, top=0.905, bottom=0.05)
+    ax_prof = fig.add_subplot(gs[0, 0]); ax_dm0 = fig.add_subplot(gs[0, 1])
+    ax_wf = fig.add_subplot(gs[1, 0]); ax_dmt = fig.add_subplot(gs[1, 1])
+    ax_bt = fig.add_subplot(gs[2, 0])
+    ax_sky = fig.add_subplot(gs[2, 1], projection="polar")
+    bt = ax_bt.get_position(); rt = ax_dmt.get_position()
+    ax_sky.set_position([rt.x0 - 0.01, bt.y0 - 0.01, rt.width + 0.02, bt.height + 0.02])
 
     ax_prof.plot(t_wf, prof_dd, "k-", lw=1.0)
     ax_prof.axvline(0, color="#c0392b", alpha=0.8, lw=0.9)
@@ -247,7 +246,7 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     im_dmt = ax_dmt.imshow(dmt_disp, aspect="auto", origin="lower", interpolation="nearest",
                            extent=[t_wf[0], t_wf[-1], dms[0], dms[-1]],
                            vmin=0, vmax=max(8.0, np.percentile(dmt_disp, 99.9)), cmap=WATERFALL_CMAP)
-    cb = fig.colorbar(im_dmt, ax=ax_dmt, pad=0.02, fraction=0.05)
+    cb = fig.colorbar(im_dmt, cax=ax_dmt.inset_axes((1.02, 0.0, 0.03, 1.0)))
     cb.set_label("boxcar S/N")
     ax_dmt.plot(0, dm, "o", ms=14, mfc="none", mec="#c0392b", mew=1.3)
     ax_dmt.set_xlim(xlim_dmt)
@@ -260,7 +259,7 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     _sky_panel(ax_sky, members, card, pointings, dm_norm, floor)
     if sc is not None:
         p = cb.ax.get_position()
-        cax = fig.add_axes([p.x0, bt.y0 + 0.02, p.width, bt.height - 0.04])
+        cax = fig.add_axes([p.x0, bt.y0 + 0.03, p.width, bt.height - 0.06])
         fig.colorbar(sc, cax=cax).set_label(r"DM (pc cm$^{-3}$)")
 
     source = "" if card.get("source", "blind") == "blind" else f"{card.get('source')}   "
