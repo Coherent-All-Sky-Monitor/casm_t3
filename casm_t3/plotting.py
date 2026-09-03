@@ -145,16 +145,16 @@ def _sky_panel(ax, members: np.ndarray, card: dict, pointings: dict | None,
             s_alt, s_az = srcs[name]
             if s_alt >= floor_alt:                       # inside the drawn sky: plot it
                 h = ax.scatter(np.radians(s_az), 90 - s_alt, marker=m, s=size, color=col,
-                               edgecolors="k", linewidths=0.5, zorder=5, label=name)
+                               edgecolors="k", linewidths=0.5, zorder=5, label=name, clip_on=False)
             elif s_alt > 0:                              # up, but below the beam grid: say so
                 h = ax.scatter([], [], marker=m, s=size, color=col, edgecolors="k", linewidths=0.5,
-                               alpha=0.6, label=f"{name} (alt {s_alt:.0f}\N{DEGREE SIGN}, below beams)")
+                               alpha=0.6, label=f"{name} (alt {s_alt:.0f}\N{DEGREE SIGN}, no beam)")
             else:
                 h = ax.scatter([], [], marker=m, s=size, color=col, edgecolors="k", linewidths=0.5,
-                               alpha=0.3, label=f"{name} (below horizon)")
+                               alpha=0.3, label=f"{name} (set)")
             handles.append(h)
         if handles:
-            ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.84, 1.10), fontsize=9,
+            ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.80, 1.10), fontsize=8.5,
                       frameon=False, labelspacing=0.9, handletextpad=0.6)
     elif sky.get("sun_alt_deg") is not None and sky["sun_alt_deg"] > 0:
         ax.scatter(np.radians(sky["sun_az_deg"]), 90 - sky["sun_alt_deg"], marker="*", s=170,
