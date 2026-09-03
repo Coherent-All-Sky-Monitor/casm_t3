@@ -39,6 +39,9 @@ COINCIDENCE_S = 256 * 1.048576e-3     # casm_t2 occupancy window_samp 256
 
 # Event-physics panels on inferno (casm-wiki display-conventions.md).
 WATERFALL_CMAP = "inferno"
+# The legacy (live) layout keeps its transientX look until the v2 layout is approved.
+LEGACY_CMAP = "viridis"
+DEFAULT_LAYOUT = "legacy"   # "legacy" (live) or "v2" (unified layout with sky footprint, under review)
 # DM colour scale for the member panels: plasma with the bright top cut off,
 # unreadable otherwise on a white panel.
 BEAM_DM_CMAP = mcolors.ListedColormap(
@@ -50,18 +53,26 @@ def _block_mean_freqs(freqs_mhz: np.ndarray, ffactor: int) -> np.ndarray:
     return freqs_mhz[:n].reshape(-1, ffactor).mean(axis=1)
 
 
-def _snr_size(snr: np.ndarray) -> np.ndarray:
-    return 8.0 + 3.0 * np.clip(snr - 12.0, 0.0, 40.0) ** 1.5
+def _snr_floor(members: np.ndarray, card: dict) -> float:
+    """Size scale origin: the lowest member S/N, i.e. the T1 threshold in force
+    (it changes with the search settings, so nothing is hard-coded)."""
+    if members.size:
+        return float(np.floor(members[:, 3].min()))
+    return float(np.floor(min(card.get("snr", 12.0), 12.0)))
+
+
+def _snr_size(snr: np.ndarray, floor: float, base: float = 8.0, k: float = 3.0) -> np.ndarray:
+    return base + k * np.clip(np.asarray(snr, dtype=float) - floor, 0.0, 40.0) ** 1.5
 
 
 def _member_panel(ax, members: np.ndarray, card: dict, window_s: float,
-                  dm_norm: mcolors.Normalize):
+                  dm_norm: mcolors.Normalize, floor: float):
     """Beam index vs time of the T1 context members; returns the scatter mappable."""
     beam = int(card["beam"])
     sc = None
     ax.axvspan(-COINCIDENCE_S, COINCIDENCE_S, color="#c0392b", alpha=0.08, lw=0, zorder=0)
     if members.size:
-        sc = ax.scatter(members[:, 0], members[:, 1], c=members[:, 2], s=_snr_size(members[:, 3]),
+        sc = ax.scatter(members[:, 0], members[:, 1], c=members[:, 2], s=_snr_size(members[:, 3], floor),
                         cmap=BEAM_DM_CMAP, norm=dm_norm, alpha=0.85, linewidths=0)
     else:
         ax.text(0.5, 0.5, "no context candidates", ha="center", va="center",
@@ -75,16 +86,18 @@ def _member_panel(ax, members: np.ndarray, card: dict, window_s: float,
     ax.set_xlabel("time - event (s)")
     ax.set_ylabel("beam")
     ax.set_title(f"T1 candidates within \N{PLUS-MINUS SIGN}{window_s:g} s of the event")
-    # size legend: three reference S/N values on the same scale as the markers
-    handles = [ax.scatter([], [], s=_snr_size(np.array([v]))[0], color="0.45", alpha=0.85, linewidths=0,
-                          label=f"S/N {v}") for v in (15, 25, 40)]
-    ax.legend(handles=handles, loc="upper left", title="marker size", fontsize=9, title_fontsize=9,
-              frameon=False, labelspacing=1.4, borderpad=0.6, handletextpad=1.2)
+    # size legend: three reference S/N values spanning what this card contains
+    top = float(members[:, 3].max()) if members.size else floor + 20
+    refs = sorted({int(round(v)) for v in (floor + 2, (floor + top) / 2, top)})
+    handles = [ax.scatter([], [], s=_snr_size(np.array([v]), floor)[0], color="0.45", alpha=0.85,
+                          linewidths=0, label=f"S/N {v}") for v in refs]
+    ax.legend(handles=handles, loc="upper left", fontsize=9, frameon=False,
+              labelspacing=1.4, borderpad=0.6, handletextpad=1.2)
     return sc
 
 
 def _sky_panel(ax, members: np.ndarray, card: dict, pointings: dict | None,
-               dm_norm: mcolors.Normalize) -> int | None:
+               dm_norm: mcolors.Normalize, floor: float) -> int | None:
     """Lit beams on the alt/az grid. Returns the footprint count, or None when the
     weights live at the event are unknown (panel then says so and draws nothing)."""
     ax.set_theta_zero_location("N")
@@ -112,7 +125,7 @@ def _sky_panel(ax, members: np.ndarray, card: dict, pointings: dict | None,
     if best:
         bb = np.array(sorted(best)); ss = np.array([best[b][0] for b in bb]); dd = np.array([best[b][1] for b in bb])
         ax.scatter(np.radians(az[bb]), 90 - alt[bb], c=dd, cmap=BEAM_DM_CMAP, norm=dm_norm,
-                   s=25 + 6 * np.clip(ss - 12, 0, 40) ** 1.5, edgecolors="k", linewidths=0.4, zorder=3)
+                   s=_snr_size(ss, floor, base=25.0, k=6.0), edgecolors="k", linewidths=0.4, zorder=3)
     beam = int(card["beam"])
     ax.scatter(np.radians(az[beam]), 90 - alt[beam], s=230, facecolors="none",
                edgecolors="#c0392b", linewidths=1.5, zorder=4)
@@ -141,9 +154,9 @@ def _coord_line(card: dict, tsamp_s: float) -> str:
     return line
 
 
-def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: float,
-                          t_rel_event_s: float, card: dict, out_png: str | Path,
-                          ffactor: int = 8, registry: weights_registry.Registry | None = None) -> Path:
+def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: float,
+                             t_rel_event_s: float, card: dict, out_png: str | Path,
+                             ffactor: int = 8, registry: weights_registry.Registry | None = None) -> Path:
     """Render the candidate plot.
 
     data : (nchan, ntime) float32, raw (dispersed) cutout for the detection beam.
@@ -239,8 +252,9 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
     ax_dmt.set_xlabel("time - event (s)")
     ax_dmt.set_title(f"boxcar S/N vs trial DM (w = {width})")
 
-    sc = _member_panel(ax_bt, members, card, window_s, dm_norm)
-    _sky_panel(ax_sky, members, card, pointings, dm_norm)
+    floor = _snr_floor(members, card)
+    sc = _member_panel(ax_bt, members, card, window_s, dm_norm, floor)
+    _sky_panel(ax_sky, members, card, pointings, dm_norm, floor)
     if sc is not None:
         p = cb.ax.get_position()
         cax = fig.add_axes([p.x0, 0.10, p.width, 0.22])
@@ -258,3 +272,172 @@ def make_candidate_figure(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: floa
     fig.savefig(out_png, dpi=120, bbox_inches="tight")
     plt.close(fig)
     return out_png
+
+
+def _legacy_beam_panel(ax, card: dict, fig) -> None:
+    """Beam-time scatter of T1 context candidates, coloured by DM."""
+    ctx = card.get("context") or {}
+    members = ctx.get("members") or []
+    beam = int(card["beam"])
+
+    if not members:
+        ax.text(0.5, 0.5, "no context candidates", ha="center", va="center",
+                transform=ax.transAxes, fontsize=9, color="0.4")
+    else:
+        m = np.asarray(members, dtype=float)  # columns: dt, beam, dm, snr, width
+        dt, mbeam, mdm, msnr = m[:, 0], m[:, 1], m[:, 2], m[:, 3]
+
+        sc = ax.scatter(dt, mbeam, c=mdm, s=4 + 2 * np.clip(msnr - 10, 0, 20),
+                        cmap=BEAM_DM_CMAP, vmin=0, vmax=max(50.0, 1.5 * card["dm"]),
+                        alpha=0.85, linewidths=0)
+        # Colorbar in an inset just outside the axes: fig.colorbar(ax=...)
+        # would shrink this panel and break its alignment with the row above.
+        cax = ax.inset_axes((1.008, 0.0, 0.012, 1.0))
+        fig.colorbar(sc, cax=cax, label=r"DM (pc cm$^{-3}$)")
+        for edge in range(64, NBEAM_TOTAL, 64):
+            ax.axhline(edge, color="0.85", lw=0.4, zorder=0)
+
+    ax.scatter([0], [beam], marker="s", s=90, facecolors="none",
+               edgecolors="red", linewidths=1.2, zorder=5)
+    window_s = float(ctx.get("window_s", 4.0))
+    ax.set_xlim(-window_s, window_s)
+    ax.set_ylim(-5, NBEAM_TOTAL + 4)
+    ax.set_xlabel("Time - event (s)")
+    ax.set_ylabel("Beam")
+
+
+def make_candidate_figure_legacy(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: float,
+                          t_rel_event_s: float, card: dict, out_png: str | Path,
+                          ffactor: int = 8) -> Path:
+    """Render the candidate plot.
+
+    Parameters
+    ----------
+    data : (nchan, ntime) float32, raw (dispersed) cutout for the detection beam.
+    t_rel_event_s : candidate time (top-of-band arrival) relative to the
+        first sample of ``data``.
+    card : trigger-card dict (candname/source/snr/dm/width/beam/event_utc,
+        optional context member list).
+
+    The waterfall and dedispersed profile use per-channel normalised data
+    (the bandpass would otherwise drown the pulse), so the profile y-axis is
+    band-averaged power in those normalised units; a boxcar S/N at the
+    candidate width is annotated on the panel rather than used as the axis.
+    The DM=0 panel is the raw band-averaged timeseries, no normalisation.
+    """
+    # hella reports width as log2 of the boxcar length in samples
+    dm, width = float(card["dm"]), 2 ** int(card["width"])
+    norm = single_pulse.normalise(data)
+    dedis = single_pulse.dedisperse(norm, dm, freqs_mhz, tsamp_s)
+
+    tfactor = max(1, width // 2)
+    wf_dd = single_pulse.downsample(dedis, ffactor, tfactor)
+    prof_dd = wf_dd.mean(axis=0)
+
+    raw_dm0 = data.mean(axis=0)
+    n = (raw_dm0.size // tfactor) * tfactor
+    raw_dm0 = raw_dm0[:n].reshape(-1, tfactor).mean(axis=1)
+
+    # Matched-boxcar S/N near the event, quoted on the profile panel.
+    prof_full = single_pulse.profile_snr(dedis.mean(axis=0), width)
+    t_full = np.arange(prof_full.size) * tsamp_s - t_rel_event_s
+    near = np.abs(t_full) <= 0.5
+    snr_box = prof_full[near].max() if near.any() else prof_full.max()
+
+    small = single_pulse.downsample(norm, ffactor, 1)
+    f_small = _block_mean_freqs(freqs_mhz, ffactor)[: small.shape[0]]
+    dms = single_pulse.dm_grid(dm)
+    dmt = single_pulse.dm_time(small, f_small, tsamp_s, dms, width)
+    dmt_disp = single_pulse.downsample(dmt, 1, tfactor)
+
+    t_wf = (np.arange(wf_dd.shape[1]) * tfactor + tfactor / 2) * tsamp_s - t_rel_event_s
+
+    # Fixed framing: every candidate gets the same window around the pulse
+    # instead of wherever it happened to fall in the dump, so plots are
+    # directly comparable. The dedispersed panels need ~a second of context
+    # (more for wide pulses); the DM-time bowtie must also fit its wings,
+    # which extend in time as the trial-DM mismatch grows. The DM=0 panel
+    # keeps the full dump span — its job is RFI context.
+    half_prof = max(1.0, 30 * width * tsamp_s)
+    wing_s = 4.148808e3 * 0.5 * (dms[-1] - dms[0]) * (
+        freqs_mhz.min() ** -2 - freqs_mhz.max() ** -2)
+    half_dmt = max(half_prof, 0.75 * wing_s)
+    xlim_prof = (max(-half_prof, t_wf[0]), min(half_prof, t_wf[-1]))
+    xlim_dmt = (max(-half_dmt, t_wf[0]), min(half_dmt, t_wf[-1]))
+
+    fig = plt.figure(figsize=(12, 11))
+    gs = fig.add_gridspec(3, 2, height_ratios=(1.0, 1.5, 1.1))
+    ax_prof = fig.add_subplot(gs[0, 0])
+    ax_dm0 = fig.add_subplot(gs[0, 1])
+    ax_wf = fig.add_subplot(gs[1, 0])
+    ax_dmt = fig.add_subplot(gs[1, 1])
+    ax_bt = fig.add_subplot(gs[2, :])
+
+    ax_prof.plot(t_wf, prof_dd, "k-", lw=0.7)
+    ax_prof.axvline(0, color="red", alpha=0.4, lw=1)
+    ax_prof.set_ylabel("Power (arb.)")
+    ax_prof.set_title(f"dedispersed at DM={dm:.2f}", fontsize=9)
+    ax_prof.text(0.02, 0.92, f"boxcar S/N = {snr_box:.1f} (w = {width})",
+                 transform=ax_prof.transAxes, fontsize=8, va="top")
+
+    ax_dm0.plot(t_wf, raw_dm0, "-", color="0.3", lw=0.7)
+    ax_dm0.axvline(0, color="red", alpha=0.4, lw=1)
+    ax_dm0.set_ylabel("Power (arb.)")
+    ax_dm0.set_title("DM = 0 raw timeseries", fontsize=9)
+
+    # Anchor the stretch to the noise so it sits in the dark end of the ramp
+    # and only RFI/pulse climb to green-yellow (the transientX look); a
+    # percentile stretch lets pure noise span the full colormap.
+    med = np.median(wf_dd)
+    sigma = 1.4826 * np.median(np.abs(wf_dd - med))
+    if sigma <= 0:
+        sigma = wf_dd.std() or 1.0
+    ax_wf.imshow(wf_dd, aspect="auto", interpolation="nearest",
+                 extent=[t_wf[0], t_wf[-1], freqs_mhz[-1], freqs_mhz[0]],
+                 vmin=med - sigma, vmax=med + 7 * sigma, cmap=LEGACY_CMAP)
+    ax_wf.set_xlim(xlim_prof)
+    ax_wf.set_ylabel("Freq (MHz)")
+    ax_wf.set_xlabel("Time - event (s)")
+
+    # dmt is already in S/N units: pin the floor at 0 so noise stays dark.
+    im_dmt = ax_dmt.imshow(dmt_disp, aspect="auto", origin="lower", interpolation="nearest",
+                           extent=[t_wf[0], t_wf[-1], dms[0], dms[-1]],
+                           vmin=0, vmax=max(8.0, np.percentile(dmt_disp, 99.9)),
+                           cmap=LEGACY_CMAP)
+    cax_dmt = ax_dmt.inset_axes((1.015, 0.0, 0.018, 1.0))
+    fig.colorbar(im_dmt, cax=cax_dmt, label=f"boxcar S/N (w = {width})")
+    ax_dmt.plot(0, dm, "o", ms=16, mfc="none", mec="red", mew=1.2)
+    ax_dmt.set_xlim(xlim_dmt)
+    ax_dmt.set_ylabel(r"DM (pc cm$^{-3}$)")
+    ax_dmt.set_xlabel("Time - event (s)")
+
+    ax_prof.set_xlim(xlim_prof)
+    ax_dm0.set_xlim(t_wf[0], t_wf[-1])
+
+    _legacy_beam_panel(ax_bt, card, fig)
+
+    source = "" if card.get("source") == "blind" else f"{card.get('source', '')}   "
+    lines = [
+        f"{card['candname']}   {source}{card['event_utc']}",
+        f"S/N={card['snr']:.1f}   DM={dm:.2f} pc cm$^{{-3}}$   "
+        f"width={width * tsamp_s * 1e3:.1f} ms",
+    ]
+    lines.append(_coord_line(card, tsamp_s))
+    fig.suptitle("\n".join(lines), fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+
+    out_png = Path(out_png)
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_png, dpi=120)
+    plt.close(fig)
+    return out_png
+
+
+def make_candidate_figure(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png,
+                          ffactor: int = 8, registry=None, layout: str | None = None) -> Path:
+    """Dispatch on layout: 'legacy' is what Slack shows until v2 is approved."""
+    layout = layout or DEFAULT_LAYOUT
+    if layout == "v2":
+        return make_candidate_figure_v2(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png,
+                                        ffactor=ffactor, registry=registry)
+    return make_candidate_figure_legacy(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png, ffactor=ffactor)

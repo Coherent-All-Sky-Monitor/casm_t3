@@ -35,8 +35,10 @@ def test_figure_renders_with_sky_and_footprint(tmp_path):
             "sky": {"weights_id": pid, "alt_deg": alt[336], "az_deg": az[336], "ra_deg": 150.0, "dec_deg": -5.0,
                     "sun_alt_deg": 40.0, "sun_az_deg": 200.0},
             "context": {"window_s": 4.0, "members": members}}
-    out = plotting.make_candidate_figure(data, freqs, tsamp, 2048 * tsamp, card, tmp_path / "c.png", registry=reg)
+    out = plotting.make_candidate_figure(data, freqs, tsamp, 2048 * tsamp, card, tmp_path / "c.png", registry=reg, layout="v2")
     assert Path(out).stat().st_size > 50_000
+    out2 = plotting.make_candidate_figure(data, freqs, tsamp, 2048 * tsamp, card, tmp_path / "legacy.png")
+    assert Path(out2).stat().st_size > 50_000
 
 
 def test_figure_renders_without_sky(tmp_path):

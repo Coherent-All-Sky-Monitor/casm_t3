@@ -77,7 +77,8 @@ def ship_artifacts(files: list[Path], candname: str, archive_host: str, archive_
     logger.info("archived %s -> %s:%s", candname, archive_host, dest)
 
 
-def render_card(card: dict, dump_files: list[Path], out_png: Path) -> tuple[Path, dict]:
+def render_card(card: dict, dump_files: list[Path], out_png: Path,
+                layout: str | None = None) -> tuple[Path, dict]:
     """Read the detection beam from dump_files and render the candidate figure.
 
     Pure transform — no dump triggers, no artifact shipping, no alerting —
@@ -93,7 +94,7 @@ def render_card(card: dict, dump_files: list[Path], out_png: Path) -> tuple[Path
                        t_rel, data.shape[2] * header.tsamp_s)
 
     png = plotting.make_candidate_figure(
-        data[0], header.freqs_mhz, header.tsamp_s, t_rel, card, out_png)
+        data[0], header.freqs_mhz, header.tsamp_s, t_rel, card, out_png, layout=layout)
 
     result = dict(card)
     result.update(host=LOCAL_HOSTNAME, dump_files=[str(f) for f in dump_files],

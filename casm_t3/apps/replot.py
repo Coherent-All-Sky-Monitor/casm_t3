@@ -31,6 +31,8 @@ def main() -> None:
     p.add_argument("card", help="trigger card path (.json or .json.done)")
     p.add_argument("--out", help="output PNG (default: ./<candname>_replot.png)")
     p.add_argument("--dump-dir", help="override the dump directory in the card")
+    p.add_argument("--layout", choices=["legacy", "v2"], default=None,
+                   help="figure layout (default: the live one; v2 = unified layout with sky footprint)")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -48,7 +50,7 @@ def main() -> None:
                  f"of the card mtime — wrong node, or dump cleaned up?")
 
     out_png = Path(args.out or f"{card['candname']}_replot.png")
-    png, _ = dump_plotter.render_card(card, files, out_png)
+    png, _ = dump_plotter.render_card(card, files, out_png, layout=args.layout)
     print(png)
 
 
