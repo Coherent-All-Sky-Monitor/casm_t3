@@ -3,6 +3,10 @@ Description=CASM T3 weights watch: records bfcorr weights reloads in the weights
 After=network-online.target
 
 [Service]
+# Slack lives on the far side of the zapdos proxy; systemd units do
+# not inherit the login shell's proxy env. ssh to corr2 is unaffected.
+Environment=https_proxy=http://10.70.0.1:8118
+Environment=http_proxy=http://10.70.0.1:8118
 ExecStart=/home/casm/software/dev/casm_venvs/casm_offline_env/bin/t3-weights-watch --log-file /mnt/nvme5/casm_pipeline/logs/t3_weights_watch.log
 Restart=always
 RestartSec=30
