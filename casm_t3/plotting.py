@@ -165,6 +165,20 @@ def _sky_panel(ax, members: np.ndarray, card: dict, pointings: dict | None,
     return n_lit
 
 
+def _dm0_curve(ax, dm: float, freqs_mhz: np.ndarray, color: str = "#e41a1c", lw: float = 1.4,
+               alpha: float = 1.0) -> None:
+    """Trace where a DM = 0 (undispersed) burst lands in the dedispersed waterfall.
+
+    Dedispersion advances each channel by its DM delay, so a zero-DM burst at
+    the event time appears as the reversed sweep t(f) = -k DM (f^-2 - f_top^-2),
+    anchored at t = 0 at the top of the band. A feature that follows this red
+    curve is terrestrial; the real pulse is the vertical line at t = 0.
+    """
+    f = np.linspace(freqs_mhz.min(), freqs_mhz.max(), 256)
+    t = -4.148808e3 * dm * (f ** -2 - freqs_mhz.max() ** -2)
+    ax.plot(t, f, color=color, lw=lw, alpha=alpha, clip_on=True)
+
+
 def _coord_line(card: dict, tsamp_s: float) -> str:
     sky = card.get("sky") or {}
     beam = card["beam"]
@@ -276,10 +290,12 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     ax_wf.imshow(wf_show, aspect="auto", interpolation="nearest",
                  extent=[t_show[0], t_show[-1], freqs_mhz[-1], freqs_mhz[0]],
                  vmin=med - 1.5 * sigma, vmax=med + 3.5 * sigma, cmap=WATERFALL_CMAP)
+    _dm0_curve(ax_wf, dm, freqs_mhz)
     ax_wf.set_xlim(xlim_prof)
+    ax_wf.set_ylim(freqs_mhz.min(), freqs_mhz.max())
     ax_wf.set_ylabel("frequency (MHz)")
     ax_wf.set_xlabel("time - event (s)")
-    ax_wf.set_title(f"waterfall, dedispersed at DM = {dm:.2f}")
+    ax_wf.set_title(f"waterfall, dedispersed at DM = {dm:.2f}, red: DM = 0 curve")
 
     im_dmt = ax_dmt.imshow(dmt_disp, aspect="auto", origin="lower", interpolation="nearest",
                            extent=[t_wf[0], t_wf[-1], dms[0], dms[-1]],
@@ -435,7 +451,9 @@ def make_candidate_figure_legacy(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_
     ax_wf.imshow(wf_dd, aspect="auto", interpolation="nearest",
                  extent=[t_wf[0], t_wf[-1], freqs_mhz[-1], freqs_mhz[0]],
                  vmin=med - sigma, vmax=med + 7 * sigma, cmap=LEGACY_CMAP)
+    _dm0_curve(ax_wf, dm, freqs_mhz)
     ax_wf.set_xlim(xlim_prof)
+    ax_wf.set_ylim(freqs_mhz.min(), freqs_mhz.max())
     ax_wf.set_ylabel("Freq (MHz)")
     ax_wf.set_xlabel("Time - event (s)")
 
