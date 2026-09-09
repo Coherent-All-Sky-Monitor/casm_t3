@@ -47,14 +47,23 @@ bundled tables, a milliarcsecond error against degree-scale beams.
 ## Daemons
 
 t3-dump-plotter polls the local T2 spool for trigger cards, waits for the
-dump file to land and settle, renders the figure, ships PNG+JSON
-artifacts, and renames the card `.done` or `.failed`. One instance per
-backend node; bulk dump data never crosses the network. A node that
-cannot reach the archive host writes artifacts locally for t3-collect to
-pull. The card-to-figure core is the side-effect-free `render_card()`,
-which t3-replot reuses — iterate on plotting with t3-replot, never by
-re-queueing cards, because the live plotter may delete a dump after
-rendering it.
+dump file to land and settle, renders the figure, writes the per-event
+archive, ships PNG+JSON artifacts, and renames the card `.done` or
+`.failed`. One instance per backend node; bulk dump data never crosses
+the network. A node that cannot reach the archive host writes artifacts
+locally for t3-collect to pull. The card-to-figure core is the
+side-effect-free `render_card()`, which t3-replot reuses — iterate on
+plotting with t3-replot, never by re-queueing cards, because the live
+plotter may delete a dump after rendering it.
+
+The per-event archive lives at `<events-root>/<candname>/` (default root
+`/mnt/nvme3/T3/EVENTS`) and holds the PNG, the result JSON, a single-beam
+float32 SIGPROC `.fil` of the detection beam, and the `.slack` marker
+t3-collect writes after posting. The `.fil` is written straight into the
+event directory before the `.dada` is deleted; the other 63 beams are not
+kept. Every step of it is fail-soft — a full or missing events disk costs
+the archive, never the figure or the Slack post. t3-collect pulls corr2's
+event tree to corr1 the same way it pulls artifacts.
 
 t3-janitor sweeps the dump trees on both nodes (ssh for the remote one):
 per-tree size quota and a maximum age, oldest plotted-and-unlabelled

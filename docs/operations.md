@@ -9,7 +9,7 @@ per node or they die at logout.
 |---|---|---|
 | t3-dump-plotter-corr1 | corr1 | plot local dumps |
 | t3-dump-plotter-corr2 | corr2 | plot local dumps, stage artifacts |
-| t3-collect | corr1 | pull corr2 artifacts (corr2 cannot ssh back) |
+| t3-collect | corr1 | pull corr2 artifacts and events (corr2 cannot ssh back) |
 | t3-web | corr1 | monitor UI on :8050 |
 | t3-janitor | corr1 | disk quota sweep across both nodes |
 
@@ -44,6 +44,13 @@ Janitor dry run before trusting a config change:
 
 prints would-deletes and touches nothing. Whatever the config says, the
 janitor refuses to delete dumps of events labelled frb or pulsar.
+
+Per-event archive: `/mnt/nvme3/T3/EVENTS/<candname>/` holds the PNG, the
+result JSON, a single-beam float32 `.fil` of the detection beam and the
+`.slack` posting marker, on both nodes, with corr2's copy rsynced to
+corr1 by t3-collect. It is not under the janitor's quota, so watch
+/mnt/nvme3 by hand. To turn it off, run the plotter with
+`--events-root ''`.
 
 Slack alerts no-op silently until a bot token exists at
 `~/.config/slack_api`.

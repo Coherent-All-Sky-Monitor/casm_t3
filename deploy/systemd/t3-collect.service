@@ -7,7 +7,7 @@ After=network-online.target
 # not inherit the login shell's proxy env. rsync (ssh) is unaffected.
 Environment=https_proxy=http://10.70.0.1:8118
 Environment=http_proxy=http://10.70.0.1:8118
-ExecStart=/home/casm/software/dev/casm_venvs/casm_offline_env/bin/t3-collect --log-file /mnt/nvme5/casm_pipeline/logs/t3_collect.log
+ExecStart=/home/casm/software/dev/casm_venvs/casm_offline_env/bin/t3-collect --events-remote casm-corr2:/mnt/nvme3/T3/EVENTS/ --events-dest /mnt/nvme3/T3/EVENTS/ --log-file /mnt/nvme5/casm_pipeline/logs/t3_collect.log
 Restart=always
 RestartSec=5
 StandardOutput=journal

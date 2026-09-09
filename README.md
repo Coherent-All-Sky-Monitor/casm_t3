@@ -24,12 +24,37 @@ extracted from the beamforming weights so offline nodes don't need the
 400 MB HDF5.
 
 The daemons: `t3-dump-plotter` (polls the T2 spool, waits for the dump to
-settle, plots, ships artifacts), `t3-web` (FastAPI monitor on :8050 —
-events with per-event trigger/miss reasons, labelling, day stats, an
-OVRO clock/source panel, injection recovery), `t3-janitor` (size and age
-quotas on the dump trees; never deletes anything labelled frb or pulsar),
-and `t3-replot` for offline re-rendering — use that for all plotter
-iteration, never card requeue.
+settle, plots, ships artifacts, keeps a per-event archive), `t3-web`
+(FastAPI monitor on :8050 — events with per-event trigger/miss reasons,
+labelling, day stats, an OVRO clock/source panel, injection recovery),
+`t3-janitor` (size and age quotas on the dump trees; never deletes
+anything labelled frb or pulsar), and `t3-replot` for offline
+re-rendering — use that for all plotter iteration, never card requeue.
+
+## Event archive
+
+Each event gets a directory under `--events-root` (default
+`/mnt/nvme3/T3/EVENTS`) on the node that made the dump:
+
+    <events-root>/<candname>/
+        <candname>.png     the figure that goes to Slack
+        <candname>.json    the result record
+        <candname>.fil     the detection beam
+        .slack             written by t3-collect once the PNG is posted
+
+The `.fil` is a single-beam float32 SIGPROC filterbank of the detection
+beam only, roughly 55 MB. The other 63 beams go away with the `.dada`,
+which is still deleted right after plotting — the archive is written
+first. Writing it never blocks the figure or the artifact shipping: a
+failure is logged and the event goes on.
+
+`t3-collect` rsyncs corr2's event tree to corr1 alongside the artifact
+pull, so both nodes' events land in one place, and mirrors the `.slack`
+marker into the event directory after a successful post. Pass
+`--events-root ''` to the plotter to turn the whole thing off.
+
+`t3-janitor` does not touch the event tree; it only sweeps the `.dada`
+dump directories.
 
 ## Install
 

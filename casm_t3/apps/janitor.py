@@ -38,8 +38,11 @@ BYTES_PER_SECOND = 375e6
 PATROL = [
     ("casm-corr1", "/mnt/nvme4/data/casm/cand_beam_dumps/stream_*"),
     ("casm-corr2", "/mnt/nvme4/data/casm/cand_beam_dumps/stream_*"),
-    ("casm-corr1", "/mnt/nvme4/data/casm/cand_dumps"),
-    ("casm-corr2", "/mnt/nvme4/data/casm/cand_dumps"),
+    # The .dada files sit one level down, in per-stream subdirectories, and
+    # find is run with -maxdepth 1: the glob must reach the stream dirs or
+    # the patrol silently matches nothing (fixed 2026-09-09).
+    ("casm-corr1", "/mnt/nvme4/data/casm/cand_dumps/stream_*"),
+    ("casm-corr2", "/mnt/nvme4/data/casm/cand_dumps/stream_*"),
 ]
 
 
@@ -122,6 +125,7 @@ def sweep(conn, args, local_host: str) -> None:
             logger.warning("listing %s:%s failed: %s", host, pattern, exc)
             continue
         if not files:
+            logger.debug("%s:%s -> no .dada files", host, pattern)
             continue
         files.sort(key=lambda f: f.mtime)
         total_gb = sum(f.size for f in files) / 1e9

@@ -26,7 +26,7 @@ from pathlib import Path
 from casm_t2 import beams as t2_beams
 from casm_t2 import logsetup
 
-from casm_t3 import dump_reader, plotting
+from casm_t3 import dump_reader, event_archive, plotting
 
 logger = logging.getLogger("t3.dump_plotter")
 
@@ -78,15 +78,28 @@ def ship_artifacts(files: list[Path], candname: str, archive_host: str, archive_
 
 
 def render_card(card: dict, dump_files: list[Path], out_png: Path,
-                layout: str | None = None) -> tuple[Path, dict]:
+                layout: str | None = None,
+                fil_path: Path | None = None) -> tuple[Path, dict]:
     """Read the detection beam from dump_files and render the candidate figure.
 
     Pure transform — no dump triggers, no artifact shipping, no alerting —
     so the offline t3-replot CLI can share it safely with the daemon.
     Returns the PNG path and the result record (card + provenance) for the
     caller to persist or discard.
+
+    With fil_path set, the detection beam is also written there as a
+    single-beam float32 filterbank; a failure to write it is logged and
+    never blocks the figure.
     """
     header, data = dump_reader.read_beams(dump_files, [card["local_beam"]])
+
+    fil_written = None
+    if fil_path is not None:
+        try:
+            fil_written = event_archive.write_event_fil(data[0], header, card, fil_path)
+        except (OSError, ValueError) as exc:
+            logger.exception("could not write %s: %s", fil_path, exc)
+
     event_utc = datetime.fromisoformat(card["event_utc"])
     t_rel = (event_utc - header.t0).total_seconds()
     if not 0 <= t_rel <= data.shape[2] * header.tsamp_s:
@@ -99,6 +112,8 @@ def render_card(card: dict, dump_files: list[Path], out_png: Path,
     result = dict(card)
     result.update(host=LOCAL_HOSTNAME, dump_files=[str(f) for f in dump_files],
                   n_samples=int(data.shape[2]), plot=str(png))
+    if fil_written is not None:
+        result["fil"] = str(fil_written)
     return png, result
 
 
@@ -114,7 +129,16 @@ def process_card(card_path: Path, args: argparse.Namespace) -> None:
         raise RuntimeError(f"no dump appeared in {dump_dir} within {args.dump_timeout}s")
 
     plots_dir = Path(args.plots_dir)
-    png, result = render_card(card, files, plots_dir / f"{candname}.png")
+    events_root = Path(args.events_root) if args.events_root else None
+    fil_path = None
+    if events_root is not None:
+        try:
+            (events_root / candname).mkdir(parents=True, exist_ok=True)
+            fil_path = events_root / candname / f"{candname}.fil"
+        except OSError as exc:
+            logger.exception("could not create event dir under %s: %s", events_root, exc)
+    png, result = render_card(card, files, plots_dir / f"{candname}.png",
+                              fil_path=fil_path)
     # Plot-then-delete keeps the dump budget disk-neutral: once the figure
     # and result JSON are archived, the bulk .dada has served its purpose.
     # Known-source dumps are kept for folding (the janitor ages them out),
@@ -124,6 +148,14 @@ def process_card(card_path: Path, args: argparse.Namespace) -> None:
     result["data_available"] = not delete_after
     result_json = plots_dir / f"{candname}.json"
     result_json.write_text(json.dumps(result, indent=2))
+
+    # Per-event archive before the dump deletion, and fail-soft: the PNG and
+    # JSON must ship even if the events disk is full or absent.
+    if events_root is not None:
+        try:
+            event_archive.archive_event(events_root, candname, [png, result_json])
+        except (OSError, ValueError) as exc:
+            logger.exception("event archive failed for %s: %s", candname, exc)
 
     ship_artifacts([png, result_json], candname, args.archive_host, args.archive_dir)
     # Slack posting moved to t3-collect on corr1 (2026-08-13): corr2 has no
@@ -158,6 +190,9 @@ def main() -> None:
     p.add_argument("--plots-dir", default="/mnt/nvme4/data/casm/t3_plots")
     p.add_argument("--archive-host", default="casm-corr1")
     p.add_argument("--archive-dir", default="/mnt/nvme5/casm_pipeline/candidates")
+    p.add_argument("--events-root", default="/mnt/nvme3/T3/EVENTS",
+                   help="per-event archive of the Slack PNG, result JSON and "
+                        "single-beam .fil; --events-root '' disables it")
     p.add_argument("--dump-timeout", type=float, default=180.0)
     p.add_argument("--poll", type=float, default=2.0)
     p.add_argument("--log-file", default=None,

@@ -46,6 +46,18 @@ def _rsync(remote: str, dest: Path) -> None:
         logger.warning("rsync pull failed: %s", exc)
 
 
+def _mirror_marker(events_dest: Path | None, name: str, text: str) -> None:
+    """Write the same .slack marker into the event dir, if one exists."""
+    if events_dest is None:
+        return
+    event_dir = events_dest / name
+    try:
+        if event_dir.is_dir():
+            (event_dir / ".slack").write_text(text)
+    except OSError as exc:
+        logger.warning("could not mark %s: %s", event_dir, exc)
+
+
 def _caption(meta: dict, web_base: str) -> str:
     """DSA-110 card style: *name* — 12.9σ, DM 239.7 pc cm⁻³, <UTC> UTC."""
     name = meta.get("candname", "?")
@@ -55,8 +67,13 @@ def _caption(meta: dict, web_base: str) -> str:
             f"<{web_base}/event/{name}|Open in dashboard>")
 
 
-def _post_new(candidates: Path, web_base: str, max_age_h: float) -> None:
-    """Post every candidate dir that has artifacts but no .slack marker."""
+def _post_new(candidates: Path, web_base: str, max_age_h: float,
+              events_dest: Path | None = None) -> None:
+    """Post every candidate dir that has artifacts but no .slack marker.
+
+    The marker is mirrored into the matching event dir (if there is one) so
+    the per-event archive records that the candidate was posted.
+    """
     if not alerts.configured():
         return                       # leave unmarked: post once configured
     now = time.time()
@@ -69,7 +86,9 @@ def _post_new(candidates: Path, web_base: str, max_age_h: float) -> None:
             continue
         stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         if now - png.stat().st_mtime > max_age_h * 3600:
-            marker.write_text(f"skipped stale {stamp}\n")
+            text = f"skipped stale {stamp}\n"
+            marker.write_text(text)
+            _mirror_marker(events_dest, d.name, text)
             continue
         try:
             meta = json.loads(meta_json.read_text())
@@ -81,7 +100,9 @@ def _post_new(candidates: Path, web_base: str, max_age_h: float) -> None:
             # res is the Slack message ts when resolvable (True otherwise);
             # keeping it makes the post editable/threadable later.
             ts = res if isinstance(res, str) else "unknown"
-            marker.write_text(f"posted {stamp} ts={ts}\n")
+            text = f"posted {stamp} ts={ts}\n"
+            marker.write_text(text)
+            _mirror_marker(events_dest, d.name, text)
         # on failure: no marker, retried next cycle (fail-soft)
 
 
@@ -90,6 +111,11 @@ def main() -> None:
     p.add_argument("--remote",
                    default="casm-corr2:/mnt/nvme4/data/casm/t3_artifacts/")
     p.add_argument("--dest", default="/mnt/nvme5/casm_pipeline/candidates/")
+    p.add_argument("--events-remote",
+                   default="casm-corr2:/mnt/nvme3/T3/EVENTS/",
+                   help="per-event archive on the remote node ('' disables)")
+    p.add_argument("--events-dest", default="/mnt/nvme3/T3/EVENTS/",
+                   help="local per-event archive the remote tree is pulled into")
     p.add_argument("--interval-s", type=float, default=20.0)
     p.add_argument("--web-base", default="http://127.0.0.1:8050",
                    help="event-page link base used in Slack captions "
@@ -103,14 +129,23 @@ def main() -> None:
     logsetup.setup(args.log_file)
     dest = Path(args.dest)
     dest.mkdir(parents=True, exist_ok=True)
+    events_dest = Path(args.events_dest) if args.events_dest else None
+    if events_dest is not None:
+        try:
+            events_dest.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.warning("event archive %s unusable: %s", events_dest, exc)
+            events_dest = None
     logger.info("collecting %s -> %s every %.0fs; slack %s", args.remote,
                 dest, args.interval_s,
                 "configured" if alerts.configured() else
                 "unconfigured (dotfiles absent; posting disabled)")
     while True:
         _rsync(args.remote, dest)
+        if args.events_remote and events_dest is not None:
+            _rsync(args.events_remote, events_dest)
         try:
-            _post_new(dest, args.web_base, args.max_age_h)
+            _post_new(dest, args.web_base, args.max_age_h, events_dest)
         except Exception:  # noqa: BLE001 - posting must not stop collection
             logger.exception("slack posting pass failed")
         time.sleep(args.interval_s)
