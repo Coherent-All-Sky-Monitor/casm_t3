@@ -23,7 +23,6 @@ import json
 import logging
 import sqlite3
 import sys
-import textwrap
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -159,10 +158,6 @@ def build_card(inj: dict, cluster: dict | None, event_utc: datetime,
         source += f"; hella reported S/N {float(rec_snr):.1f} at DM {float(rec_dm):.1f}"
     else:
         source += "; not recovered by hella"
-    # The full sentence overflows the v2 suptitle (it is ~90 characters on top
-    # of the name and the UTC), so the title says only what this is and the
-    # parameters go in the waterfall panel title, wrapped to the panel width.
-    note = "\n".join(textwrap.wrap(source, 52))
 
     sky = pointings = None
     if registry is not None:
@@ -175,7 +170,6 @@ def build_card(inj: dict, cluster: dict | None, event_utc: datetime,
     return {
         "candname": f"inj{int(inj['id'])}",
         "source": source,
-        "panel_note": note,
         "event_utc": event_utc.isoformat(timespec="milliseconds"),
         "beam": int(beam),
         "local_beam": int(local_beam),
@@ -309,7 +303,11 @@ def main(argv: list[str] | None = None) -> None:
         except (OSError, ValueError) as exc:
             logger.exception("could not write %s: %s", args.fil, exc)
 
-    plot_card = dict(card, source="injection replay")
+    # The figure reads like any other event: only the name marks it as an
+    # injection ("INJECTION: <id>   <UTC>"), the S/N, DM, width and sky lines
+    # stay exactly as they are for a real candidate, and the injected
+    # parameters live in the card JSON alone (Vishnu, 2026-09-09).
+    plot_card = dict(card, candname=f"INJECTION: {int(inj['id'])}", source="blind")
     png = plotting.make_candidate_figure(beam2d, header.freqs_mhz, header.tsamp_s,
                                          t_rel, plot_card, Path(args.out), layout=args.layout)
 
