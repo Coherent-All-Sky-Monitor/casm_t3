@@ -213,6 +213,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--db", default=DEFAULT_DB, help="T2 sqlite (opened read-only)")
     p.add_argument("--cands-dir", default=DEFAULT_CANDS_DIR,
                    help="hella cands directory for the T1 context panel")
+    p.add_argument("--label", help="display name for the title, e.g. "
+                   "inj_20260910_0002; defaults to the ledger's file_id")
     p.add_argument("--event-utc", help="arrival time at the top of the band; "
                                        "default: the matched cluster's event_utc")
     p.add_argument("--event-offset-s", type=float,
@@ -307,7 +309,10 @@ def main(argv: list[str] | None = None) -> None:
     # injection ("INJECTION: <id>   <UTC>"), the S/N, DM, width and sky lines
     # stay exactly as they are for a real candidate, and the injected
     # parameters live in the card JSON alone (Vishnu, 2026-09-09).
-    plot_card = dict(card, candname=f"INJECTION: {int(inj['id'])}", source="blind")
+    # The label a person reads: the ledger's file_id (inj_YYYYMMDD_NNNN),
+    # overridable with --label, falling back to the integer row id.
+    label = args.label or inj.get("file_id") or str(int(inj["id"]))
+    plot_card = dict(card, candname=f"INJECTION: {label}", source="blind")
     png = plotting.make_candidate_figure(beam2d, header.freqs_mhz, header.tsamp_s,
                                          t_rel, plot_card, Path(args.out), layout=args.layout)
 
