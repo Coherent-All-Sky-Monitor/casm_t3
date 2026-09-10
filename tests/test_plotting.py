@@ -151,7 +151,7 @@ def test_dm_time_recovers_a_narrow_high_dm_pulse(tmp_path):
 
     f_new = plotting.dmt_ffactor_for(dm, width, tsamp, 0.030517578125, nchan)
     assert f_new == 1
-    assert peak_at_true_dm(f_new) >= 0.8 * prof_peak         # within 20%
+    assert peak_at_true_dm(f_new) >= 0.9 * prof_peak         # within 10%
     assert peak_at_true_dm(8) < 0.8 * prof_peak              # the old fixed factor loses it
 
 
@@ -163,6 +163,8 @@ def test_dm_grid_contains_the_candidate_dm():
         dms = single_pulse.dm_grid(dm)
         assert dms.size == 65
         assert np.isclose(dms, dm).any()
+        if dm >= max(0.4 * dm, 15.0):       # grid not clipped at DM 0
+            assert np.isclose(dms[dms.size // 2], dm)   # dm sits at the centre trial
         assert np.all(np.diff(dms) > 0)
         assert dms[0] >= 0.0
         # uniform step of max(0.4 dm, 15) / 32, and the full span above dm
