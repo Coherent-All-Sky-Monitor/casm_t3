@@ -31,6 +31,32 @@ labelling, day stats, an OVRO clock/source panel, injection recovery),
 anything labelled frb or pulsar), and `t3-replot` for offline
 re-rendering — use that for all plotter iteration, never card requeue.
 
+## Weights watch and the beam ellipse
+
+`t3-weights-watch` tails the medusa weights log and records in
+`casm_t2.weights_registry` every weights load that was not an upload, so T2 and
+T3 always know which product was live at an event time.
+
+Since 2026-09-09 it also gives each product its **beam ellipse**: the E-W and
+N-S FWHM of the synthesised beam, computed with
+`bf_weights_generator.config.compute_beam_fwhm` from the product's own h5
+(`array_config/positions_enu` masked by `array_config/active_mask`, i.e. only
+the antennas included in beamforming) at that h5's band centre. T2 clusters
+candidates on the sky with those FWHMs as its link scales, so the clustering
+ellipse now follows the deployed weights instead of a constant in
+`config/t2d.yaml` — those config values are the fallback for a product with no
+ellipse. Everything is fail-soft: an unreadable h5 or a missing generator logs
+a warning and leaves the product without an ellipse.
+
+Products registered before that date carry no ellipse. Fill them in with
+
+    t3-weights-watch --backfill-fwhm --dry-run     # prints what it would write
+    t3-weights-watch --backfill-fwhm               # writes it
+
+which walks every product in the registry, reads each h5 still on disk, and
+stores the pair on the product record. Products whose h5 is gone are reported
+as `unavailable` and left alone.
+
 ## Event archive
 
 Each event gets a directory under `--events-root` (default

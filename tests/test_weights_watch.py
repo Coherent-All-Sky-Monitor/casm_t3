@@ -115,3 +115,92 @@ def test_upload_match_and_ib_transfer_ignored(tmp_path, monkeypatch):
     w = ww.Watcher(reg, alert=False)
     assert w.handle_transfer(1, t0 + timedelta(seconds=4), ww.CB_BYTES) is None      # the upload itself
     assert w.handle_transfer(1, t0 + timedelta(seconds=4), 67584) is None            # IB transfer ignored
+
+
+# --------------------------------------------------------------- beam ellipse
+def _write_weights_h5(path, positions, mask, freqs_hz=None):
+    """A minimal stand-in for a deployed weights h5 (the datasets the ellipse needs)."""
+    import h5py
+    import numpy as np
+    with h5py.File(str(path), "w") as f:
+        g = f.create_group("array_config")
+        g.create_dataset("positions_enu", data=np.asarray(positions, dtype=float))
+        g.create_dataset("active_mask", data=np.asarray(mask, dtype=bool))
+        if freqs_hz is not None:
+            f.create_dataset("frequencies_hz", data=np.asarray(freqs_hz, dtype=float))
+
+
+def _positions():
+    """Two 'enabled' antennas 3 m apart E-W and 21 m N-S, plus a disabled outlier
+    200 m east that would halve the E-W width if the mask were ignored."""
+    return ([[0.0, 0.0, 0.0], [3.0, 21.0, 0.0], [200.0, 0.0, 0.0]], [True, True, False])
+
+
+def test_beam_fwhm_from_h5_uses_enabled_antennas_only(tmp_path):
+    from bf_weights_generator.config import compute_beam_fwhm
+    pos, mask = _positions()
+    h5 = tmp_path / "w.h5"
+    _write_weights_h5(h5, pos, mask, freqs_hz=[437.5e6])
+    got = ww.beam_fwhm_from_h5(h5)
+    expect = compute_beam_fwhm([pos[0], pos[1]], freq_hz=437.5e6)
+    assert got is not None
+    assert abs(got[0] - expect[0]) < 1e-9 and abs(got[1] - expect[1]) < 1e-9
+    assert got[0] > got[1]          # E-W is the wide axis
+
+
+def test_beam_fwhm_from_h5_fail_soft(tmp_path):
+    assert ww.beam_fwhm_from_h5(tmp_path / "missing.h5") is None
+    import h5py
+    empty = tmp_path / "empty.h5"
+    with h5py.File(str(empty), "w") as f:
+        f.create_dataset("weights_int8", data=[1, 2, 3])
+    assert ww.beam_fwhm_from_h5(empty) is None
+
+
+def test_watch_registers_ellipse_from_the_product_h5(tmp_path, monkeypatch):
+    """A defaults load identifies a product; the product gets its ellipse."""
+    pos, mask = _positions()
+    h5 = tmp_path / "w.h5"
+    _write_weights_h5(h5, pos, mask, freqs_hz=[437.5e6])
+    reg = wr.Registry(tmp_path / "reg")
+    alt = [30.0] * 512; az = [10.0] * 512
+    pid = reg.record_product(h5_path=str(h5), stream_md5={s: f"a{s}" for s in range(6)},
+                             alt_deg=alt, az_deg=az)
+    assert reg.product(pid)["beam_fwhm_x_deg"] is None
+    monkeypatch.setattr(ww, "defaults_payload_md5", lambda stream, **kw: f"a{stream}")
+    w = ww.Watcher(reg, alert=False)
+    utc = datetime(2026, 9, 9, 21, 12, 26, tzinfo=timezone.utc)
+    ev = w.handle_transfer(0, utc, ww.CB_BYTES)
+    assert ev["product_id"] == pid
+    prod = reg.product(pid)
+    assert prod["beam_fwhm_x_deg"] == round(ww.beam_fwhm_from_h5(h5)[0], 3)
+    assert prod["beam_fwhm_y_deg"] > 0
+    # and it rides out to t2 with the pointings
+    p = reg.pointings_for(utc + timedelta(seconds=1))
+    assert p["beam_fwhm_x_deg"] == prod["beam_fwhm_x_deg"]
+
+
+def test_backfill_dry_run_writes_nothing(tmp_path):
+    pos, mask = _positions()
+    h5 = tmp_path / "w.h5"
+    _write_weights_h5(h5, pos, mask, freqs_hz=[437.5e6])
+    reg = wr.Registry(tmp_path / "reg")
+    alt = [30.0] * 512; az = [10.0] * 512
+    pid_ok = reg.record_product(h5_path=str(h5), stream_md5={s: f"a{s}" for s in range(6)},
+                                alt_deg=alt, az_deg=az)
+    pid_gone = reg.record_product(h5_path=str(tmp_path / "gone.h5"),
+                                  stream_md5={s: f"b{s}" for s in range(6)},
+                                  alt_deg=alt, az_deg=az)
+    pid_done = reg.record_product(h5_path=str(h5), stream_md5={s: f"c{s}" for s in range(6)},
+                                  alt_deg=alt, az_deg=az,
+                                  beam_fwhm_x_deg=18.14, beam_fwhm_y_deg=3.88)
+    rows = {r["product_id"]: r for r in ww.backfill_fwhm(reg, dry_run=True)}
+    assert rows[pid_ok]["status"] == "would-write" and rows[pid_ok]["fwhm_x"] > 0
+    assert rows[pid_gone]["status"] == "unavailable"
+    assert rows[pid_done]["status"] == "present" and rows[pid_done]["fwhm_x"] == 18.14
+    assert reg.product(pid_ok)["beam_fwhm_x_deg"] is None      # nothing written
+
+    rows = {r["product_id"]: r for r in ww.backfill_fwhm(reg, dry_run=False)}
+    assert rows[pid_ok]["status"] == "computed"
+    assert reg.product(pid_ok)["beam_fwhm_x_deg"] == rows[pid_ok]["fwhm_x"]
+    assert reg.product(pid_gone)["beam_fwhm_x_deg"] is None

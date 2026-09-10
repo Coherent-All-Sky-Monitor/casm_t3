@@ -43,6 +43,19 @@ disagree = partial deploy; unknown or unhashable payload) go to the registry's
 alerts.jsonl and to Slack through casm_t3.alerts when configured. Nothing in
 fourier-space is touched: this reads two log files and hashes files on disk.
 
+Beam ellipse (2026-09-09). T2 clusters candidates on the sky, and the link scale
+on each axis is the synthesised beam's own FWHM. That ellipse follows the antennas
+that were actually beamformed, so it belongs to the weights product, not to a
+constant in t2d.yaml. Whenever this watch identifies a product that carries no
+ellipse it reads the product's h5 (``array_config/positions_enu`` masked by
+``array_config/active_mask``, i.e. the antennas included in beamforming), runs
+``bf_weights_generator.config.compute_beam_fwhm`` at the h5's own band centre and
+stores (E-W, N-S) degrees on the product record. Everything about it is fail-soft:
+a missing h5, a missing dataset or an unimportable generator leaves the product
+without an ellipse and logs a warning, and t2d then falls back to its config
+values. ``t3-weights-watch --backfill-fwhm`` does the same pass over every product
+already in the registry (``--dry-run`` prints what it would write).
+
 Operations note: Slack sits behind the zapdos proxy and systemd user units do
 not inherit the login shell's environment, so t3-weights-watch.service needs
 
@@ -120,6 +133,112 @@ def defaults_payload_md5(stream: int, timeout_s: float = 120.0) -> str | None:
         return None
 
 
+def beam_fwhm_from_h5(h5_path: str | Path) -> tuple[float, float] | None:
+    """(E-W, N-S) beam FWHM in degrees for the enabled antennas of a weights h5.
+
+    Returns None (with a warning) for anything unreadable: no file, no
+    ``array_config/positions_enu``, no h5py/bf_weights_generator in this
+    interpreter. The reference frequency is the h5's own band centre
+    (``frequencies_hz``), which is what these weights actually beamform; without
+    it ``compute_beam_fwhm`` falls back to its own 437.5 MHz band centre.
+    """
+    try:
+        import h5py
+        import numpy as np
+        from bf_weights_generator.config import compute_beam_fwhm
+    except ImportError as exc:
+        logger.warning("beam FWHM not computed (%s); the product keeps no ellipse", exc)
+        return None
+    try:
+        with h5py.File(str(h5_path), "r") as f:
+            grp = f.get("array_config")
+            if grp is None or "positions_enu" not in grp:
+                logger.warning("no array_config/positions_enu in %s; the product keeps no ellipse", h5_path)
+                return None
+            pos = np.asarray(grp["positions_enu"][:], dtype=float)
+            mask = None
+            for key in ("active_mask", "include_in_beamforming", "enabled_mask"):
+                if key in grp:
+                    mask = np.asarray(grp[key][:], dtype=bool)
+                    break
+            if mask is not None and mask.shape[0] == pos.shape[0]:
+                pos = pos[mask]
+            elif mask is not None:
+                logger.warning("enabled mask in %s does not match positions (%s vs %s); using all positions",
+                               h5_path, mask.shape, pos.shape)
+            freq_hz = None
+            if "frequencies_hz" in f:
+                freqs = np.asarray(f["frequencies_hz"][:], dtype=float)
+                if freqs.size:
+                    freq_hz = float(freqs.mean())
+        if pos.ndim != 2 or pos.shape[0] == 0 or pos.shape[1] < 2:
+            logger.warning("positions_enu in %s has shape %s; the product keeps no ellipse", h5_path, pos.shape)
+            return None
+        fwhm_ew, fwhm_ns = compute_beam_fwhm(pos, freq_hz=freq_hz)
+        logger.info("beam ellipse from %s: %.3f deg E-W x %.3f deg N-S (%d enabled antennas, %.3f MHz)",
+                    h5_path, fwhm_ew, fwhm_ns, pos.shape[0],
+                    (freq_hz or 437.5e6) / 1e6)
+        return float(fwhm_ew), float(fwhm_ns)
+    except (OSError, ValueError, KeyError) as exc:
+        logger.warning("beam FWHM from %s failed (%s); the product keeps no ellipse", h5_path, exc)
+        return None
+
+
+def ensure_product_fwhm(reg: wr.Registry, product_id: str | None, *,
+                        dry_run: bool = False) -> tuple[float, float] | None:
+    """Give a registered product its beam ellipse if it has none. Fail-soft."""
+    if not product_id:
+        return None
+    prod = reg.product(product_id)
+    if prod is None:
+        return None
+    if prod.get("beam_fwhm_x_deg") is not None:
+        return prod["beam_fwhm_x_deg"], prod["beam_fwhm_y_deg"]
+    h5_path = prod.get("h5_path") or ""
+    if not h5_path or not Path(h5_path).exists():
+        logger.warning("product %s has no beam ellipse and its h5 %s is gone; "
+                       "t2 clustering falls back to the configured FWHMs",
+                       product_id, h5_path or "<unset>")
+        return None
+    fwhm = beam_fwhm_from_h5(h5_path)
+    if fwhm is None:
+        return None
+    if dry_run:
+        logger.info("[dry-run] would store beam ellipse %.3f x %.3f deg on product %s",
+                    fwhm[0], fwhm[1], product_id)
+        return fwhm
+    if reg.set_product_fwhm(product_id, fwhm[0], fwhm[1]):
+        logger.info("stored beam ellipse %.3f deg E-W x %.3f deg N-S on product %s",
+                    fwhm[0], fwhm[1], product_id)
+    return fwhm
+
+
+def backfill_fwhm(reg: wr.Registry, dry_run: bool = False) -> list[dict]:
+    """Compute and store the beam ellipse for every product that lacks one.
+
+    Returns one row per product: ``{product_id, h5_path, status, fwhm_x, fwhm_y}``
+    with status 'present' (already had one), 'computed', 'would-write' (dry run)
+    or 'unavailable'.
+    """
+    rows = []
+    for pid in reg.product_ids():
+        prod = reg.product(pid) or {}
+        h5_path = prod.get("h5_path", "")
+        if prod.get("beam_fwhm_x_deg") is not None:
+            rows.append({"product_id": pid, "h5_path": h5_path, "status": "present",
+                         "fwhm_x": prod["beam_fwhm_x_deg"], "fwhm_y": prod.get("beam_fwhm_y_deg")})
+            continue
+        fwhm = ensure_product_fwhm(reg, pid, dry_run=dry_run)
+        if fwhm is None:
+            rows.append({"product_id": pid, "h5_path": h5_path, "status": "unavailable",
+                         "fwhm_x": None, "fwhm_y": None})
+        else:
+            rows.append({"product_id": pid, "h5_path": h5_path,
+                         "status": "would-write" if dry_run else "computed",
+                         "fwhm_x": round(fwhm[0], 3), "fwhm_y": round(fwhm[1], 3)})
+    return rows
+
+
 class Tail:
     """Follow a log file from an offset, surviving rotation and truncation."""
 
@@ -180,6 +299,9 @@ class Watcher:
             return None                     # IB weights or partial; not a pointing change
         if self.upload_matches(stream, utc):
             logger.info("stream %d transfer at %s matches an upload event", stream, utc.isoformat())
+            prod, status = self.reg.product_at(utc + timedelta(seconds=1))
+            if prod is not None:
+                ensure_product_fwhm(self.reg, prod.get("product_id"))
             return None
         started = self.start_near(stream, utc)
         seen = ("bfcorr START within %.0f s" % self.restart_window.total_seconds()
@@ -207,6 +329,7 @@ class Watcher:
             return ev
         ev = self.reg.record_live_event(utc=utc, stream=stream, payload_md5=md5, source="defaults",
                                         evidence=f"FIFO transfer matching on-disk defaults, {seen}")
+        ensure_product_fwhm(self.reg, ev.get("product_id"))
         self._check_after_defaults(stream, utc, ev)
         return ev
 
@@ -241,10 +364,23 @@ def main(argv=None) -> None:
     p.add_argument("--from-start", action="store_true", help="replay the whole logs instead of tailing from now")
     p.add_argument("--once", action="store_true", help="process what is already in the logs and exit (replay)")
     p.add_argument("--no-slack", action="store_true")
+    p.add_argument("--backfill-fwhm", action="store_true",
+                   help="give every registered product its beam ellipse (from its h5) and exit")
+    p.add_argument("--dry-run", action="store_true",
+                   help="with --backfill-fwhm: print what would be written, write nothing")
     p.add_argument("--log-file")
     args = p.parse_args(argv)
     logging.basicConfig(filename=args.log_file, level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    if args.backfill_fwhm:
+        rows = backfill_fwhm(wr.Registry(args.registry), dry_run=args.dry_run)
+        head = "DRY RUN, nothing written" if args.dry_run else "written"
+        print(f"beam-ellipse backfill over {args.registry} ({head})")
+        for r in rows:
+            fwhm = ("-" if r["fwhm_x"] is None
+                    else f"{r['fwhm_x']:.3f} x {r['fwhm_y']:.3f} deg (E-W x N-S)")
+            print(f"  {r['product_id']}  {r['status']:<12} {fwhm}  {r['h5_path']}")
+        return
     watcher = Watcher(wr.Registry(args.registry), alert=not args.no_slack)
     wtail = Tail(Path(args.weights_log), start_at_end=not args.from_start)
     btail = Tail(Path(args.bfcorr_log), start_at_end=not args.from_start)
