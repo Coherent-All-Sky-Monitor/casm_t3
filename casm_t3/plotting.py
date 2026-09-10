@@ -60,12 +60,14 @@ BEAM_DM_CMAP = mcolors.ListedColormap(
 # candidate in noise or wastes band resolution on a strong one. Pick the row
 # count that puts about SUBBAND_TARGET_SIGMA in each pixel, clamped to a sane
 # range and snapped to a divisor of the band so no channels are dropped.
-# 4.2 sigma per pixel (S/N 23 -> 32 rows, S/N 43 -> 96) was chosen on the
-# 2026-09-10 injection renders.
+# Row counts are restricted to powers of two: 3072 = 3 x 1024, so every power
+# of two from 16 to 1024 divides the band, and 256 rows (12 channels/row) is
+# the fine limit we keep. 4.2 sigma per pixel (S/N 23 -> 32 rows, S/N 43 ->
+# 128 rows) was chosen on the 2026-09-10 injection renders.
 SUBBAND_TARGET_SIGMA = 4.2
 SUBBAND_MIN = 16
-SUBBAND_MAX = 384                     # 3072 / 8, the fixed value used until 2026-09-10
-SUBBAND_CHOICES = (16, 24, 32, 48, 64, 96, 128, 192, 384)
+SUBBAND_MAX = 256
+SUBBAND_CHOICES = (16, 32, 64, 128, 256)
 DEFAULT_SUBBANDS = SUBBAND_MAX        # fallback when the card carries no usable S/N
 
 
@@ -424,8 +426,10 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     ax_wf.set_ylim(freqs_mhz.min(), freqs_mhz.max())
     ax_wf.set_ylabel("frequency (MHz)")
     ax_wf.set_xlabel("time - event (s)")
-    ax_wf.set_title(f"waterfall, dedispersed at DM = {dm:.2f}, red: DM = 0 curve"
-                    f" ({nsub} subbands)")
+    wf_title = f"waterfall, dedispersed at DM = {dm:.2f}, red: DM = 0 curve"
+    if subbands:
+        wf_title += f" ({nsub} subbands)"
+    ax_wf.set_title(wf_title)
 
     im_dmt = ax_dmt.imshow(dmt_disp, aspect="auto", origin="lower", interpolation="nearest",
                            extent=[t_dmt[0], t_dmt[-1], dms[0], dms[-1]],
@@ -593,7 +597,8 @@ def make_candidate_figure_legacy(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_
     ax_wf.set_ylim(freqs_mhz.min(), freqs_mhz.max())
     ax_wf.set_ylabel("Freq (MHz)")
     ax_wf.set_xlabel("Time - event (s)")
-    ax_wf.set_title(f"waterfall ({nsub} subbands)", fontsize=9)
+    if subbands:
+        ax_wf.set_title(f"waterfall ({nsub} subbands)", fontsize=9)
 
     # dmt is already in S/N units: pin the floor at 0 so noise stays dark.
     im_dmt = ax_dmt.imshow(dmt_disp, aspect="auto", origin="lower", interpolation="nearest",

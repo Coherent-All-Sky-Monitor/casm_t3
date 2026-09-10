@@ -53,12 +53,14 @@ def test_figure_renders_without_sky(tmp_path):
 def test_subbands_for_matches_target_per_pixel_sigma():
     # nrows chosen so snr / sqrt(nrows) lands near SUBBAND_TARGET_SIGMA per pixel
     assert plotting.subbands_for(23) == 32          # 23 / 5.7 = 4.1 sigma
-    assert plotting.subbands_for(43) == 96          # 43 / 9.8 = 4.4 sigma
+    assert plotting.subbands_for(43) == 128         # 43 / 11.3 = 3.8 sigma
     assert plotting.subbands_for(12) == 16          # clamped at the coarse end
-    assert plotting.subbands_for(200) == 384        # clamped at the fine end
+    assert plotting.subbands_for(200) == 256        # clamped at the fine end
     for snr in (8.0, 12.5, 17.0, 23.0, 30.0, 43.0, 60.0, 120.0, 500.0):
         n = plotting.subbands_for(snr)
-        assert 16 <= n <= 384 and 3072 % n == 0
+        assert 16 <= n <= 256
+        assert n & (n - 1) == 0                      # power of two
+        assert 3072 % n == 0
     # no usable S/N falls back to the historical fixed value
     assert plotting.subbands_for(None) == plotting.DEFAULT_SUBBANDS
     assert plotting.subbands_for(float("nan")) == plotting.DEFAULT_SUBBANDS
@@ -78,7 +80,7 @@ def test_waterfall_title_reports_adaptive_subbands(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Axes, "set_title", record)
 
-    for snr, expect in ((23.0, 32), (43.0, 96)):
+    for snr in (23.0, 43.0):
         seen.clear()
         card = {"candname": f"TESTsub{int(snr)}", "source": "blind",
                 "event_utc": "2026-09-02T20:00:00.000+00:00",
@@ -87,17 +89,17 @@ def test_waterfall_title_reports_adaptive_subbands(tmp_path, monkeypatch):
         plotting.make_candidate_figure(data, freqs, tsamp, 2048 * tsamp, card,
                                        tmp_path / f"s{int(snr)}.png", layout="v2")
         wf = [t for t in seen if t.startswith("waterfall")]
-        assert len(wf) == 1 and wf[0].endswith(f"({expect} subbands)"), wf
+        assert len(wf) == 1 and not wf[0].endswith("subbands)"), wf
 
-    # explicit override wins over the S/N rule
+    # explicit override wins over the S/N rule, and only the override shows the count
     seen.clear()
     card = {"candname": "TESToverride", "source": "blind",
             "event_utc": "2026-09-02T20:00:00.000+00:00",
             "beam": 5, "snr": 23.0, "dm": 30.0, "width": 3,
             "context": {"window_s": 4.0, "members": []}}
     plotting.make_candidate_figure(data, freqs, tsamp, 2048 * tsamp, card,
-                                   tmp_path / "ovr.png", layout="v2", subbands=384)
-    assert any(t.endswith("(384 subbands)") for t in seen)
+                                   tmp_path / "ovr.png", layout="v2", subbands=256)
+    assert any(t.endswith("(256 subbands)") for t in seen)
 
 
 def test_dmt_ffactor_keeps_intra_subband_smear_under_the_boxcar():
