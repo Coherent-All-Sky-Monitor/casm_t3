@@ -295,7 +295,11 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     ax_wf.set_ylim(freqs_mhz.min(), freqs_mhz.max())
     ax_wf.set_ylabel("frequency (MHz)")
     ax_wf.set_xlabel("time - event (s)")
-    ax_wf.set_title(f"waterfall, dedispersed at DM = {dm:.2f}, red: DM = 0 curve")
+    # ``panel_note`` is an optional extra line for cards whose provenance does
+    # not fit the title (the injection replay puts the injected parameters here).
+    note = str(card.get("panel_note") or "")
+    ax_wf.set_title(f"waterfall, dedispersed at DM = {dm:.2f}, red: DM = 0 curve"
+                    + (f"\n{note}" if note else ""))
 
     im_dmt = ax_dmt.imshow(dmt_disp, aspect="auto", origin="lower", interpolation="nearest",
                            extent=[t_wf[0], t_wf[-1], dms[0], dms[-1]],

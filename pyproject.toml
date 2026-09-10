@@ -22,6 +22,7 @@ t3-janitor = "casm_t3.apps.janitor:main"
 t3-web = "casm_t3.web.app:main"
 t3-collect = "casm_t3.apps.collect:main"
 t3-weights-watch = "casm_t3.apps.weights_watch:main"
+t3-replay-injection = "casm_t3.apps.replay_injection:main"
 
 [tool.setuptools.packages.find]
 include = ["casm_t3*"]

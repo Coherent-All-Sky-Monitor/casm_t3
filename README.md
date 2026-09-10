@@ -82,6 +82,36 @@ marker into the event directory after a successful post. Pass
 `t3-janitor` does not touch the event tree; it only sweeps the `.dada`
 dump directories.
 
+## Injection replay
+
+Injections are merged into the assembled stream (d2) that hella searches,
+while the dump daemons read d0, upstream of that merge — so the pulse that
+fired the trigger is by construction absent from every dump (casm-wiki
+`dump-stream-content.md`). `t3-replay-injection` puts it back:
+
+    t3-replay-injection --inject-id 661 --dump <file or dir> --out inj661.png
+
+It reads the injection's row from the T2 ledger (read-only) and its matched
+cluster, pulls the detection beam out of the dump you point it at, adds the
+same synthetic pulse the injection bot generated, and renders the ordinary
+v2 figure. `--no-pulse` renders the dump untouched for comparison,
+`--card-json` writes the synthetic card, `--fil` writes the beam plus pulse
+as a float32 single-beam filterbank. When there is no matched cluster (or
+you are replaying into a dump from a different observation), give
+`--event-utc` or `--event-offset-s` and, if the beam differs,
+`--local-beam`; `--dm/--amp/--sigma-ms` override the injected parameters.
+
+The pulse itself lives in `casm_t3.injection` and is a re-implementation of
+`gen_filterbank` in `/home/casm/software/dev/make_noise_fil_with_frb_snr.py`,
+down to the integer-sample per-channel delays and the uint8 truncation of
+the Gaussian; `tests/test_injection.py` compares it against the generator's
+own output sample for sample.
+
+The dump has to be long enough to hold the dispersion sweep after the event
+(2.85 s at DM 300): channels whose arrival falls past the end of the dump
+contribute nothing and the tool warns that the replayed S/N is then a lower
+limit.
+
 ## Install
 
     pip install -e .
