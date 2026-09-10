@@ -20,6 +20,8 @@ and no sky panel, never a guess.
 
 from __future__ import annotations
 
+import logging
+import math
 from pathlib import Path
 
 import matplotlib
@@ -34,6 +36,8 @@ from casm_t2 import weights_registry
 
 from . import single_pulse
 
+logger = logging.getLogger(__name__)
+
 NBEAM_TOTAL = 512
 COINCIDENCE_S = 256 * 1.048576e-3     # casm_t2 occupancy window_samp 256
 
@@ -47,6 +51,122 @@ DEFAULT_LAYOUT = "v2"       # approved by Vishnu 2026-09-03: unified layout with
 # unreadable otherwise on a white panel.
 BEAM_DM_CMAP = mcolors.ListedColormap(
     plt.get_cmap("plasma")(np.linspace(0.0, 0.85, 256)), name="plasma_dark")
+
+
+# --- adaptive frequency averaging for the image panels -----------------------
+# The waterfall and DM-time panels average channels into rows. With the time bin
+# matched to the boxcar, a pulse of total S/N spreads over the rows as roughly
+# S/N / sqrt(nrows) per pixel, so a fixed row count either buries a weak
+# candidate in noise or wastes band resolution on a strong one. Pick the row
+# count that puts about SUBBAND_TARGET_SIGMA in each pixel, clamped to a sane
+# range and snapped to a divisor of the band so no channels are dropped.
+# 4.2 sigma per pixel (S/N 23 -> 32 rows, S/N 43 -> 96) was chosen on the
+# 2026-09-10 injection renders.
+SUBBAND_TARGET_SIGMA = 4.2
+SUBBAND_MIN = 16
+SUBBAND_MAX = 384                     # 3072 / 8, the fixed value used until 2026-09-10
+SUBBAND_CHOICES = (16, 24, 32, 48, 64, 96, 128, 192, 384)
+DEFAULT_SUBBANDS = SUBBAND_MAX        # fallback when the card carries no usable S/N
+
+
+def subbands_for(snr: float | None, nchan: int = 3072,
+                 target_sigma: float = SUBBAND_TARGET_SIGMA) -> int:
+    """Number of frequency rows to average the band into for the image panels.
+
+    nrows = clamp(round((snr / target_sigma) ** 2), SUBBAND_MIN, SUBBAND_MAX),
+    snapped to the nearest entry of SUBBAND_CHOICES that divides ``nchan``, so
+    that per-pixel S/N ~ snr / sqrt(nrows) lands near ``target_sigma``.
+    A missing or non-finite S/N falls back to DEFAULT_SUBBANDS.
+    """
+    hi = min(SUBBAND_MAX, max(1, int(nchan)))
+    choices = [n for n in SUBBAND_CHOICES if n <= hi and int(nchan) % n == 0]
+    if not choices:
+        choices = [n for n in SUBBAND_CHOICES if n <= hi] or [hi]
+    try:
+        snr = float(snr)
+    except (TypeError, ValueError):
+        snr = float("nan")
+    if not math.isfinite(snr) or snr <= 0:
+        ideal = DEFAULT_SUBBANDS
+    else:
+        ideal = round((snr / float(target_sigma)) ** 2)
+    ideal = min(max(ideal, SUBBAND_MIN), hi)
+    return min(choices, key=lambda n: (abs(n - ideal), n))
+
+
+# --- channel averaging for the DM-time panel --------------------------------
+# The DM-time panel must NOT reuse the display subbands. Its channels are
+# averaged BEFORE dedispersion, so every trial DM smears within a subband:
+# t_smear = 8.3e-3 ms x DM x BW_MHz / f_GHz^3 at the bottom of the band. At
+# DM 300 a 96-channel subband (2.9 MHz) smears by ~118 ms, and even the old
+# fixed ffactor 8 (0.244 MHz) smears ~10 ms at DM 300 and ~30 ms at DM 900 —
+# far past the boxcar, which is why the bow-tie faded on narrow candidates.
+# Average only as far as the smear stays within half the boxcar width.
+DMT_FFACTOR_CHOICES = (1, 2, 3, 4, 6, 8, 12, 16)
+DMT_SMEAR_F_GHZ = 0.3906              # bottom of the band, worst case
+DMT_SMEAR_K_MS = 8.3e-3               # ms per (pc cm^-3) per MHz at 1 GHz
+DMT_SMEAR_FRACTION = 0.5              # allowed smear, in boxcar widths
+
+
+def dmt_ffactor_for(dm: float, boxcar_samples: int, tsamp_s: float,
+                    chan_mhz: float, nchan: int = 3072) -> int:
+    """Largest channel-average factor whose intra-subband smear stays within
+    DMT_SMEAR_FRACTION of the boxcar width; 1 (full resolution) if none does."""
+    limit_ms = DMT_SMEAR_FRACTION * max(1, int(boxcar_samples)) * float(tsamp_s) * 1e3
+    chan_mhz = abs(float(chan_mhz))
+    best = 1
+    for f in DMT_FFACTOR_CHOICES:
+        if int(nchan) % f:
+            continue
+        smear_ms = DMT_SMEAR_K_MS * abs(float(dm)) * (f * chan_mhz) / DMT_SMEAR_F_GHZ ** 3
+        if smear_ms <= limit_ms:
+            best = max(best, f)
+    return best
+
+
+def _dmt_plan(dm: float, width: int, freqs_mhz: np.ndarray, tsamp_s: float) -> int:
+    chan_mhz = abs(float(np.median(np.diff(freqs_mhz)))) if freqs_mhz.size > 1 else 1.0
+    f_dmt = dmt_ffactor_for(dm, width, tsamp_s, chan_mhz, nchan=freqs_mhz.size)
+    smear_ms = DMT_SMEAR_K_MS * abs(dm) * (f_dmt * chan_mhz) / DMT_SMEAR_F_GHZ ** 3
+    logger.info("DM-time channel factor %d (%d channels, smear %.1f ms vs boxcar %.1f ms)",
+                f_dmt, freqs_mhz.size // f_dmt, smear_ms, width * tsamp_s * 1e3)
+    return f_dmt
+
+
+DMT_MAX_COLUMNS = 400
+
+
+def _dmt_tfactor(width: int, xlim_dmt: tuple[float, float], tsamp_s: float) -> int:
+    """Time binning for the DM-time display: one boxcar width, or coarser.
+
+    Two constraints. (1) A pixel narrower than the boxcar shows a fraction of
+    the pulse, exactly as in the waterfall, so the floor is ``width``.
+    (2) imshow(interpolation="nearest") resamples by dropping columns, so a
+    panel ~450 px wide fed ~950 columns can drop the one column holding the
+    peak: a S/N 24.7 narrow candidate rendered as a faint dot. Cap the drawn
+    columns inside the plotted window at DMT_MAX_COLUMNS. Pooling is by
+    maximum (single_pulse.downsample_max), the array is already a boxcar S/N.
+    """
+    n_window = max(1, int(math.ceil((xlim_dmt[1] - xlim_dmt[0]) / tsamp_s)))
+    return int(max(max(1, width), math.ceil(n_window / DMT_MAX_COLUMNS)))
+
+
+def _subband_plan(card: dict, nchan: int, ffactor: int | None,
+                  subbands: int | None) -> tuple[int, int]:
+    """(nrows, ffactor) for the image panels: explicit override wins, else adaptive."""
+    nchan = max(1, int(nchan))
+    if subbands:
+        nrows = max(1, min(int(subbands), nchan))
+        ffactor = max(1, nchan // nrows)
+    elif ffactor:
+        ffactor = max(1, int(ffactor))
+    else:
+        nrows = subbands_for(card.get("snr"), nchan=nchan)
+        ffactor = max(1, nchan // nrows)
+    nrows = nchan // ffactor
+    logger.info("display averaging: %d subbands (ffactor %d) for S/N %s over %d channels",
+                nrows, ffactor, card.get("snr"), nchan)
+    return nrows, ffactor
 
 
 def _block_mean_freqs(freqs_mhz: np.ndarray, ffactor: int) -> np.ndarray:
@@ -196,7 +316,8 @@ def _coord_line(card: dict, tsamp_s: float) -> str:
 
 def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: float,
                              t_rel_event_s: float, card: dict, out_png: str | Path,
-                             ffactor: int = 8, registry: weights_registry.Registry | None = None) -> Path:
+                             ffactor: int | None = None, registry: weights_registry.Registry | None = None,
+                             subbands: int | None = None) -> Path:
     """Render the candidate plot.
 
     data : (nchan, ntime) float32, raw (dispersed) cutout for the detection beam.
@@ -206,17 +327,20 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
         ``sky`` block written by t2d, optional context member list).
     """
     dm, width = float(card["dm"]), 2 ** int(card["width"])
+    nsub, ffactor = _subband_plan(card, freqs_mhz.size, ffactor, subbands)
     norm = single_pulse.normalise(data)
     dedis = single_pulse.dedisperse(norm, dm, freqs_mhz, tsamp_s)
     tfactor = max(1, width // 2)
     wf_dd = single_pulse.downsample(dedis, ffactor, tfactor)
     prof_dd = wf_dd.mean(axis=0)
-    # Waterfall pixels: 16 channels x one boxcar width. A pulse of total S/N 17
-    # over 3072 channels is ~0.9 sigma per pixel at 8 channels whatever the time
-    # averaging; at 16 channels it is ~1.2 sigma and reads as a coherent line.
-    ffactor_wf = 16
+    # Waterfall pixels: one subband x one boxcar width. The subband count comes
+    # from the candidate S/N (see subbands_for): a pulse of total S/N 17 over
+    # 3072 channels is ~0.9 sigma per pixel at 384 rows whatever the time
+    # averaging, and reads as a coherent line only once the rows are coarse
+    # enough to put ~3 sigma in each.
     tfactor_wf = max(1, width)
-    wf_show = single_pulse.downsample(dedis, ffactor_wf, tfactor_wf)
+    wf_show = single_pulse.downsample(dedis, ffactor, tfactor_wf)
+    nsub = wf_show.shape[0]     # what the panel actually shows, after truncation
     t_show = (np.arange(wf_show.shape[1]) * tfactor_wf + tfactor_wf / 2) * tsamp_s - t_rel_event_s
     raw_dm0 = data.mean(axis=0)
     n = (raw_dm0.size // tfactor) * tfactor
@@ -225,17 +349,22 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     t_full = np.arange(prof_full.size) * tsamp_s - t_rel_event_s
     near = np.abs(t_full) <= 0.5
     snr_box = prof_full[near].max() if near.any() else prof_full.max()
-    small = single_pulse.downsample(norm, ffactor, 1)
-    f_small = _block_mean_freqs(freqs_mhz, ffactor)[: small.shape[0]]
+    # DM-time: its own, much finer channel averaging (see dmt_ffactor_for) —
+    # the display subbands would smear the pulse away before dedispersion.
+    f_dmt = _dmt_plan(dm, width, freqs_mhz, tsamp_s)
+    small = single_pulse.downsample(norm, f_dmt, 1)
+    f_small = _block_mean_freqs(freqs_mhz, f_dmt)[: small.shape[0]]
     dms = single_pulse.dm_grid(dm)
     dmt = single_pulse.dm_time(small, f_small, tsamp_s, dms, width)
-    dmt_disp = single_pulse.downsample(dmt, 1, tfactor)
     t_wf = (np.arange(wf_dd.shape[1]) * tfactor + tfactor / 2) * tsamp_s - t_rel_event_s
     half_prof = max(1.0, 30 * width * tsamp_s)
     wing_s = 4.148808e3 * 0.5 * (dms[-1] - dms[0]) * (freqs_mhz.min() ** -2 - freqs_mhz.max() ** -2)
     half_dmt = max(half_prof, 0.75 * wing_s)
     xlim_prof = (max(-half_prof, t_wf[0]), min(half_prof, t_wf[-1]))
     xlim_dmt = (max(-half_dmt, t_wf[0]), min(half_dmt, t_wf[-1]))
+    tfactor_dmt = _dmt_tfactor(width, xlim_dmt, tsamp_s)
+    dmt_disp = single_pulse.downsample_max(dmt, tfactor_dmt)
+    t_dmt = (np.arange(dmt_disp.shape[1]) * tfactor_dmt + tfactor_dmt / 2) * tsamp_s - t_rel_event_s
 
     ctx = card.get("context") or {}
     members = np.asarray(ctx.get("members") or [], dtype=float).reshape(-1, 5)
@@ -295,10 +424,11 @@ def make_candidate_figure_v2(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
     ax_wf.set_ylim(freqs_mhz.min(), freqs_mhz.max())
     ax_wf.set_ylabel("frequency (MHz)")
     ax_wf.set_xlabel("time - event (s)")
-    ax_wf.set_title(f"waterfall, dedispersed at DM = {dm:.2f}, red: DM = 0 curve")
+    ax_wf.set_title(f"waterfall, dedispersed at DM = {dm:.2f}, red: DM = 0 curve"
+                    f" ({nsub} subbands)")
 
     im_dmt = ax_dmt.imshow(dmt_disp, aspect="auto", origin="lower", interpolation="nearest",
-                           extent=[t_wf[0], t_wf[-1], dms[0], dms[-1]],
+                           extent=[t_dmt[0], t_dmt[-1], dms[0], dms[-1]],
                            vmin=0, vmax=max(8.0, np.percentile(dmt_disp, 99.9)), cmap=WATERFALL_CMAP)
     cb = fig.colorbar(im_dmt, cax=ax_dmt.inset_axes((1.02, 0.0, 0.03, 1.0)))
     cb.set_label("boxcar S/N")
@@ -364,7 +494,7 @@ def _legacy_beam_panel(ax, card: dict, fig) -> None:
 
 def make_candidate_figure_legacy(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: float,
                           t_rel_event_s: float, card: dict, out_png: str | Path,
-                          ffactor: int = 8) -> Path:
+                          ffactor: int | None = None, subbands: int | None = None) -> Path:
     """Render the candidate plot.
 
     Parameters
@@ -383,11 +513,13 @@ def make_candidate_figure_legacy(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_
     """
     # hella reports width as log2 of the boxcar length in samples
     dm, width = float(card["dm"]), 2 ** int(card["width"])
+    nsub, ffactor = _subband_plan(card, freqs_mhz.size, ffactor, subbands)
     norm = single_pulse.normalise(data)
     dedis = single_pulse.dedisperse(norm, dm, freqs_mhz, tsamp_s)
 
     tfactor = max(1, width // 2)
     wf_dd = single_pulse.downsample(dedis, ffactor, tfactor)
+    nsub = wf_dd.shape[0]
     prof_dd = wf_dd.mean(axis=0)
 
     raw_dm0 = data.mean(axis=0)
@@ -400,11 +532,12 @@ def make_candidate_figure_legacy(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_
     near = np.abs(t_full) <= 0.5
     snr_box = prof_full[near].max() if near.any() else prof_full.max()
 
-    small = single_pulse.downsample(norm, ffactor, 1)
-    f_small = _block_mean_freqs(freqs_mhz, ffactor)[: small.shape[0]]
+    # DM-time keeps its own channel resolution, not the display subbands.
+    f_dmt = _dmt_plan(dm, width, freqs_mhz, tsamp_s)
+    small = single_pulse.downsample(norm, f_dmt, 1)
+    f_small = _block_mean_freqs(freqs_mhz, f_dmt)[: small.shape[0]]
     dms = single_pulse.dm_grid(dm)
     dmt = single_pulse.dm_time(small, f_small, tsamp_s, dms, width)
-    dmt_disp = single_pulse.downsample(dmt, 1, tfactor)
 
     t_wf = (np.arange(wf_dd.shape[1]) * tfactor + tfactor / 2) * tsamp_s - t_rel_event_s
 
@@ -420,6 +553,10 @@ def make_candidate_figure_legacy(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_
     half_dmt = max(half_prof, 0.75 * wing_s)
     xlim_prof = (max(-half_prof, t_wf[0]), min(half_prof, t_wf[-1]))
     xlim_dmt = (max(-half_dmt, t_wf[0]), min(half_dmt, t_wf[-1]))
+
+    tfactor_dmt = _dmt_tfactor(width, xlim_dmt, tsamp_s)
+    dmt_disp = single_pulse.downsample_max(dmt, tfactor_dmt)
+    t_dmt = (np.arange(dmt_disp.shape[1]) * tfactor_dmt + tfactor_dmt / 2) * tsamp_s - t_rel_event_s
 
     fig = plt.figure(figsize=(12, 11))
     gs = fig.add_gridspec(3, 2, height_ratios=(1.0, 1.5, 1.1))
@@ -456,10 +593,11 @@ def make_candidate_figure_legacy(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_
     ax_wf.set_ylim(freqs_mhz.min(), freqs_mhz.max())
     ax_wf.set_ylabel("Freq (MHz)")
     ax_wf.set_xlabel("Time - event (s)")
+    ax_wf.set_title(f"waterfall ({nsub} subbands)", fontsize=9)
 
     # dmt is already in S/N units: pin the floor at 0 so noise stays dark.
     im_dmt = ax_dmt.imshow(dmt_disp, aspect="auto", origin="lower", interpolation="nearest",
-                           extent=[t_wf[0], t_wf[-1], dms[0], dms[-1]],
+                           extent=[t_dmt[0], t_dmt[-1], dms[0], dms[-1]],
                            vmin=0, vmax=max(8.0, np.percentile(dmt_disp, 99.9)),
                            cmap=LEGACY_CMAP)
     cax_dmt = ax_dmt.inset_axes((1.015, 0.0, 0.018, 1.0))
@@ -492,10 +630,16 @@ def make_candidate_figure_legacy(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_
 
 
 def make_candidate_figure(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png,
-                          ffactor: int = 8, registry=None, layout: str | None = None) -> Path:
-    """Dispatch on layout: 'legacy' is what Slack shows until v2 is approved."""
+                          ffactor: int | None = None, registry=None, layout: str | None = None,
+                          subbands: int | None = None) -> Path:
+    """Dispatch on layout: 'legacy' is what Slack shows until v2 is approved.
+
+    ``subbands`` (or the lower-level ``ffactor``) forces the row count of the
+    image panels; left unset, it follows the card S/N through subbands_for.
+    """
     layout = layout or DEFAULT_LAYOUT
     if layout == "v2":
         return make_candidate_figure_v2(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png,
-                                        ffactor=ffactor, registry=registry)
-    return make_candidate_figure_legacy(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png, ffactor=ffactor)
+                                        ffactor=ffactor, registry=registry, subbands=subbands)
+    return make_candidate_figure_legacy(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png,
+                                        ffactor=ffactor, subbands=subbands)

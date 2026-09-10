@@ -206,6 +206,9 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--dump", required=True, help=".dada file, or a directory of them")
     p.add_argument("--out", required=True, help="output PNG")
     p.add_argument("--layout", choices=["v2", "legacy"], default="v2")
+    p.add_argument("--subbands", type=int, default=None,
+                   help="force the number of frequency rows in the waterfall and DM-time "
+                        "panels (default: from the S/N, plotting.subbands_for)")
     p.add_argument("--no-pulse", action="store_true",
                    help="render the dump untouched, for comparison")
     p.add_argument("--card-json", help="also write the synthetic card here")
@@ -314,7 +317,8 @@ def main(argv: list[str] | None = None) -> None:
     label = args.label or inj.get("file_id") or str(int(inj["id"]))
     plot_card = dict(card, candname=f"INJECTION: {label}", source="blind")
     png = plotting.make_candidate_figure(beam2d, header.freqs_mhz, header.tsamp_s,
-                                         t_rel, plot_card, Path(args.out), layout=args.layout)
+                                         t_rel, plot_card, Path(args.out), layout=args.layout,
+                                         subbands=args.subbands)
 
     measured = measure_snr(beam2d, header.freqs_mhz, header.tsamp_s, plot_dm, width, t_rel)
     card["replay"] = {"dump_files": [str(f) for f in files], "n_samples": int(ntime),
