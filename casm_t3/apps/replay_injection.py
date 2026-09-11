@@ -79,29 +79,87 @@ def _dump_span(path: Path) -> tuple[dump_reader.DumpHeader, float]:
     return hdr, nframe * hdr.ninner * hdr.tsamp_s
 
 
-def select_dump_files(dump: Path, event_utc: datetime | None,
-                      pad_s: float = 2.0) -> list[Path]:
-    """The .dada file(s) to read: a file as given, or the ones in a directory
-    whose time span brackets the event."""
-    if dump.is_file():
-        return [dump]
-    files = sorted(dump.glob("*.dada"), key=lambda p: p.name)
-    if not files:
-        raise SystemExit(f"no .dada files in {dump}")
-    if event_utc is None:
-        return files
-    hits = []
-    for p in files:
-        try:
-            hdr, span_s = _dump_span(p)
-        except (OSError, ValueError) as exc:
-            logger.warning("skipping %s: %s", p.name, exc)
+def select_dump_files(dump, event_utc: datetime | None,
+                      sweep_s: float = 0.0, pad_s: float = 2.0) -> list[Path]:
+    """The .dada file(s) to read: files as given, or the ones in a directory
+    whose time span overlaps [event, event + sweep].
+
+    ``dump`` is one path or several (list, or comma-separated string). The
+    dump daemon rolls a requested window into consecutive files, so a sweep
+    that starts near the end of one file finishes in the next: selecting only
+    the file holding the top-of-band arrival cuts the pulse at the seam.
+    """
+    if isinstance(dump, (str, Path)):
+        dumps = [Path(d) for d in str(dump).split(",") if d]
+    else:
+        dumps = [Path(d) for d in dump]
+
+    given, dirs = [], []
+    for d in dumps:
+        (dirs if d.is_dir() else given).append(d)
+    if given and not dirs:
+        return given                                  # explicit files: all of them
+
+    lo = None if event_utc is None else event_utc - timedelta(seconds=pad_s)
+    hi = None if event_utc is None else event_utc + timedelta(seconds=sweep_s + pad_s)
+    hits = list(given)
+    for d in dirs:
+        files = sorted(d.glob("*.dada"), key=lambda p: p.name)
+        if not files:
+            raise SystemExit(f"no .dada files in {d}")
+        if event_utc is None:
+            hits += files
             continue
-        if hdr.t0 - timedelta(seconds=pad_s) <= event_utc <= hdr.t0 + timedelta(seconds=span_s + pad_s):
-            hits.append(p)
+        for p in files:
+            try:
+                hdr, span_s = _dump_span(p)
+            except (OSError, ValueError) as exc:
+                logger.warning("skipping %s: %s", p.name, exc)
+                continue
+            if hdr.t0 <= hi and hdr.t0 + timedelta(seconds=span_s) >= lo:
+                hits.append(p)
     if not hits:
-        raise SystemExit(f"no .dada in {dump} covers {event_utc.isoformat()}")
+        window = "" if event_utc is None else f" covers {event_utc.isoformat()} +{sweep_s:.1f}s"
+        raise SystemExit(f"no .dada in {', '.join(str(d) for d in dumps)}{window}")
     return hits
+
+
+def order_dump_files(files: list[Path]) -> list[Path]:
+    """Sort dump files by header start time and check they butt together.
+
+    A gap or an overlap larger than one sample would shift every sample past
+    the seam, so it is an error rather than a silent splice.
+    """
+    spans = []
+    for p in files:
+        hdr, span_s = _dump_span(p)
+        spans.append((hdr.t0, span_s, hdr.tsamp_s, Path(p)))
+    spans.sort(key=lambda s: s[0])
+    for (t0, span_s, tsamp_s, a), (t1, _, _, b) in zip(spans, spans[1:]):
+        gap_s = (t1 - (t0 + timedelta(seconds=span_s))).total_seconds()
+        if abs(gap_s) > tsamp_s:
+            raise SystemExit(
+                f"dump files are not contiguous: {a.name} ends {gap_s * 1e3:+.1f} ms "
+                f"before {b.name} starts (tsamp {tsamp_s * 1e3:.3f} ms) — "
+                f"refusing to splice")
+    return [s[3] for s in spans]
+
+
+def truncation_freq_mhz(freqs_mhz: np.ndarray, dm: float, tsamp_s: float,
+                        sigma_ms: float, c0_samp: int, ntime: int) -> float | None:
+    """Lowest channel frequency (MHz) whose pulse fits entirely in the data.
+
+    None when the whole sweep fits. ``injected_pulse`` drops channels whose
+    delayed arrival falls past the last sample, so this is what the figure
+    must declare instead of showing a band-truncated pulse.
+    """
+    delays = injection.channel_delay_samples(np.asarray(freqs_mhz), dm, tsamp_s)
+    halfwin = int(np.ceil(4.0 * injection.sigma_samples(sigma_ms, tsamp_s)))
+    fits = (int(c0_samp) + delays + halfwin) <= ntime - 1
+    if fits.all():
+        return None
+    return float(np.asarray(freqs_mhz)[fits].min() if fits.any()
+                 else np.asarray(freqs_mhz).max())
 
 
 # -------------------------------------------------------------- context
@@ -203,7 +261,9 @@ def _parse_utc(text: str) -> datetime:
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--inject-id", type=int, required=True, help="row id in the injections ledger")
-    p.add_argument("--dump", required=True, help=".dada file, or a directory of them")
+    p.add_argument("--dump", required=True,
+                   help=".dada file, a directory of them, or a comma-separated list; "
+                        "every file the DM sweep touches is read")
     p.add_argument("--out", required=True, help="output PNG")
     p.add_argument("--layout", choices=["v2", "legacy"], default="v2")
     p.add_argument("--subbands", type=int, default=None,
@@ -249,11 +309,16 @@ def main(argv: list[str] | None = None) -> None:
     elif args.event_offset_s is None and cluster and cluster.get("event_utc"):
         event_utc = _parse_utc(cluster["event_utc"])
 
-    files = select_dump_files(Path(args.dump), event_utc)
+    # The sweep decides how much data is needed: at DM 650 it is 6 s, more
+    # than one dump file, and every file it touches has to be read.
+    sweep_s = 0.0 if args.no_pulse else timing.dispersion_sweep_s(dm)
+    files = order_dump_files(select_dump_files(args.dump, event_utc, sweep_s))
+    logger.info("reading %d dump file(s): %s", len(files),
+                ", ".join(f.name for f in files))
     beam = int((cluster or {}).get("beam") or inj.get("beam") or 0)
     local_beam = (args.local_beam if args.local_beam is not None
                   else t2_beams.local_beam(beam))
-    header, data = dump_reader.read_beams(files, [local_beam])
+    header, data = dump_reader.read_beams(files, [local_beam], sort_by_name=False)
     beam2d = data[0]
     nchan, ntime = beam2d.shape
 
@@ -271,6 +336,7 @@ def main(argv: list[str] | None = None) -> None:
                 else _width_index(sigma_ms, header.tsamp_s))
     plot_dm = float((cluster or {}).get("dm") or dm)
 
+    trunc_mhz = None
     if not args.no_pulse:
         # The generator's own frequency grid, so the per-channel integer
         # delays are the ones that were actually injected.
@@ -282,12 +348,13 @@ def main(argv: list[str] | None = None) -> None:
         logger.info("added pulse: DM %.2f amp %g sigma %.1f ms at sample %d "
                     "(peak %.0f counts, %d channels lit)", dm, amp, sigma_ms, c0,
                     pulse.max(), lit)
-        if lit < nchan:
-            sweep_s = timing.dispersion_sweep_s(dm)
-            logger.warning("only %d of %d channels fit: the DM %.0f sweep is %.2f s "
-                           "but the event sits %.2f s into a %.2f s dump — the replayed "
-                           "S/N is a lower limit", lit, nchan, dm, sweep_s, t_rel,
-                           ntime * header.tsamp_s)
+        trunc_mhz = truncation_freq_mhz(freqs, dm, header.tsamp_s, sigma_ms, c0, ntime)
+        if trunc_mhz is not None:
+            logger.warning("replay truncated below %.2f MHz: the DM %.0f sweep is "
+                           "%.2f s but the event sits %.2f s into %.2f s of dump "
+                           "(%d files, %d of %d channels lit) — the replayed S/N is "
+                           "a lower limit", trunc_mhz, dm, sweep_s, t_rel,
+                           ntime * header.tsamp_s, len(files), lit, nchan)
         beam2d = beam2d + pulse
 
     stream = int(t2_beams.stream_for_beam(beam) if cluster
@@ -315,7 +382,8 @@ def main(argv: list[str] | None = None) -> None:
     # The label a person reads: the ledger's file_id (inj_YYYYMMDD_NNNN),
     # overridable with --label, falling back to the integer row id.
     label = args.label or inj.get("file_id") or str(int(inj["id"]))
-    plot_card = dict(card, candname=f"INJECTION: {label}", source="blind")
+    suffix = "" if trunc_mhz is None else f" (replay truncated below {trunc_mhz:.0f} MHz)"
+    plot_card = dict(card, candname=f"INJECTION: {label}{suffix}", source="blind")
     png = plotting.make_candidate_figure(beam2d, header.freqs_mhz, header.tsamp_s,
                                          t_rel, plot_card, Path(args.out), layout=args.layout,
                                          subbands=args.subbands)
@@ -323,6 +391,8 @@ def main(argv: list[str] | None = None) -> None:
     measured = measure_snr(beam2d, header.freqs_mhz, header.tsamp_s, plot_dm, width, t_rel)
     card["replay"] = {"dump_files": [str(f) for f in files], "n_samples": int(ntime),
                       "pulse_added": not args.no_pulse, "pulse_sample": c0,
+                      "truncated_below_mhz": (None if trunc_mhz is None
+                                              else round(trunc_mhz, 2)),
                       "measured_boxcar_snr": round(measured, 2), "plot": str(png)}
     if args.card_json:
         Path(args.card_json).parent.mkdir(parents=True, exist_ok=True)

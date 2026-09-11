@@ -105,14 +105,21 @@ def read_header(path: str | Path) -> DumpHeader:
         return parse_header(f.read(DEFAULT_HDR_SIZE).decode(errors="replace"))
 
 
-def read_beams(paths: list[str | Path], beams: list[int]) -> tuple[DumpHeader, np.ndarray]:
+def read_beams(paths: list[str | Path], beams: list[int],
+               sort_by_name: bool = True) -> tuple[DumpHeader, np.ndarray]:
     """Read selected local beams (0-63) from a dump.
 
     Returns the header of the first file and an array of shape
     (len(beams), nchan, ntime) in float32, channels in descending
     frequency order.
+
+    ``sort_by_name=False`` keeps the caller's order: byte offsets in the
+    filenames are not zero-padded, so a name sort puts 10000000 before
+    9000000 and splices the files in the wrong order.
     """
-    paths = sorted(paths, key=lambda p: Path(p).name)
+    if sort_by_name:
+        paths = sorted(paths, key=lambda p: Path(p).name)
+    paths = list(paths)
     header = read_header(paths[0])
     dtype = np.float16 if header.nbit == 16 else np.float32
     frame_elems = header.nbeam * header.nchan * header.ninner
