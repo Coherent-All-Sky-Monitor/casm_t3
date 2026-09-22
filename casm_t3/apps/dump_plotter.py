@@ -26,7 +26,7 @@ from pathlib import Path
 from casm_t2 import beams as t2_beams
 from casm_t2 import logsetup
 
-from casm_t3 import dump_reader, event_archive, plotting
+from casm_t3 import dump_reader, event_archive, fil_reader, plotting
 
 logger = logging.getLogger("t3.dump_plotter")
 
@@ -116,6 +116,30 @@ def render_card(card: dict, dump_files: list[Path], out_png: Path,
                   n_samples=int(data.shape[2]), plot=str(png))
     if fil_written is not None:
         result["fil"] = str(fil_written)
+    return png, result
+
+
+def render_card_from_fil(card: dict, fil_path: Path, out_png: Path,
+                         layout: str | None = None,
+                         subbands: int | None = None) -> tuple[Path, dict]:
+    """Render the figure from the archived single-beam .fil instead of a dump.
+
+    The .dada is deleted minutes after a trigger and the per-event .fil is
+    kept, so this is how an archived event is re-plotted (t3-replot). A pure
+    transform like render_card: no dumps, no shipping, no alerting.
+    """
+    data, header = fil_reader.read_fil(fil_path)
+    event_utc = datetime.fromisoformat(card["event_utc"])
+    t_rel = (event_utc - header.t0).total_seconds()
+    span_s = data.shape[1] * header.tsamp_s
+    if not 0 <= t_rel <= span_s:
+        logger.warning("event time %.2fs falls outside %s of %.2fs; timing offset?",
+                       t_rel, Path(fil_path).name, span_s)
+    png = plotting.make_candidate_figure(data, header.freqs_mhz, header.tsamp_s, t_rel,
+                                         card, out_png, layout=layout, subbands=subbands)
+    result = dict(card)
+    result.update(host=LOCAL_HOSTNAME, fil=str(fil_path), n_samples=int(data.shape[1]),
+                  plot=str(png))
     return png, result
 
 
