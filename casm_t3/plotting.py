@@ -826,7 +826,7 @@ def _gulp_sky_panel(ax, gulp: dict, card: dict, pointings: dict | None) -> tuple
     snr_hi = float(max(pool)) if pool else 1.0
     for beams, colour, alpha, edge, lw, floor, z, gid in (
             (grey, OTHER_COLOR, 0.75, OTHER_EDGE, 0.8, GREY_BEAM_MIN_PT2, 2, "sky_grey"),
-            (red, TRIGGER_COLOR, 0.95, TRIGGER_COLOR, 0.3, 0.0, 4, "sky_red")):
+            (red, TRIGGER_COLOR, 0.95, TRIGGER_COLOR, 0.3, GREY_BEAM_MIN_PT2, 4, "sky_red")):
         if not beams:
             continue
         idx = sorted(beams)
