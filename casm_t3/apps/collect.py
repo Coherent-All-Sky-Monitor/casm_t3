@@ -64,7 +64,7 @@ def _caption(meta: dict, web_base: str) -> str:
     utc = str(meta.get("event_utc", "")).replace("T", " ")[:19]
     return (f"*{name}* — {meta.get('snr', 0):.1f}σ, "
             f"DM {meta.get('dm', 0):.1f} pc cm⁻³, {utc} UTC | "
-            f"<{web_base}/event/{name}|Open in dashboard>")
+            f"<{web_base}/cands/{name}|Open in dashboard>")
 
 
 def _post_new(candidates: Path, web_base: str, max_age_h: float,
@@ -117,8 +117,8 @@ def main() -> None:
     p.add_argument("--events-dest", default="/mnt/nvme3/T3/EVENTS/",
                    help="local per-event archive the remote tree is pulled into")
     p.add_argument("--interval-s", type=float, default=20.0)
-    p.add_argument("--web-base", default="http://127.0.0.1:8050",
-                   help="event-page link base used in Slack captions "
+    p.add_argument("--web-base", default="http://localhost:8061",
+                   help="candidate-page link base used in Slack captions, <base>/cands/<name> "
                         "(readers use the standard ssh tunnel)")
     p.add_argument("--max-age-h", type=float, default=24.0,
                    help="never post candidates older than this; they get a "

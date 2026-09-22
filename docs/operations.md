@@ -9,7 +9,7 @@ per node or they die at logout.
 |---|---|---|
 | t3-dump-plotter-corr1 | corr1 | plot local dumps |
 | t3-dump-plotter-corr2 | corr2 | plot local dumps, stage artifacts |
-| t3-collect | corr1 | pull corr2 artifacts and events (corr2 cannot ssh back) |
+| t3-collect | corr1 | pull corr2 artifacts and events (corr2 cannot ssh back); post candidates to Slack, "Open in dashboard" -> casm_monitor `http://localhost:8061/cands/<name>` (`--web-base`) |
 | t3-web | corr1 | monitor UI on :8050 |
 | t3-janitor | corr1 | disk quota sweep across both nodes |
 
