@@ -76,7 +76,12 @@ def test_replay_renders_and_recovers_snr(tmp_path):
                                        width=2, snr=19.7, members=[], window_s=4.0,
                                        registry=None)
     assert card["candname"] == "inj1"
-    assert card["source"].startswith("injection replay:")
+    # no replay parameters in the source (it would reach the figure title);
+    # they are in the one-line summary for the Slack thread
+    assert card["source"] == "injection"
+    summary = card["injection"]["summary"]
+    assert summary.startswith("injected DM 100.0, FWHM 4.7 ms, amp 8 counts, S/N 19.7")
+    assert summary.endswith("; not recovered by hella")
     out = replay_injection.plotting.make_candidate_figure(
         data, freqs, tsamp, c0 * tsamp, card, tmp_path / "inj.png", layout="v2")
     assert Path(out).stat().st_size > 50_000

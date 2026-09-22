@@ -159,3 +159,40 @@ def test_main_reads_both_files_and_flags_a_single_file(two_file_dump, tmp_path, 
         _expected_truncation_mhz(NSAMP), abs=0.2)
     assert "replay truncated below" in caplog.text
     assert one["measured_boxcar_snr"] < both["measured_boxcar_snr"]
+
+
+def test_replay_title_is_hella_snr_at_the_ledger_dm(two_file_dump, tmp_path, monkeypatch):
+    """The figure is named "INJECTION: <file_id>", quotes hella's recovered S/N
+    and dedisperses at the ledger DM; no injection parameters reach it."""
+    d, _names = two_file_dump
+    db = _ledger(tmp_path)
+    event = (datetime(2026, 9, 11, 1, 40, 0, tzinfo=timezone.utc)
+             + timedelta(seconds=C0 * TSAMP_S))
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO clusters (id, snr, dm, beam, width, samp, event_utc, "
+                 "n_members, n_beams) VALUES (77, 15.5, ?, 100, 1, 0, ?, 3, 1)",
+                 (DM + 1.3, event.isoformat()))
+    conn.execute("UPDATE injections SET matched_cluster = 77, rec_snr = 15.5, rec_dm = ? "
+                 "WHERE id = 3", (DM + 1.3,))
+    conn.commit()
+    conn.close()
+
+    seen = {}
+
+    def fake_figure(data, freqs, tsamp, t_rel, card, out_png, **kw):
+        seen.update(card)
+        Path(out_png).write_bytes(b"png")
+        return Path(out_png)
+
+    monkeypatch.setattr(replay_injection.plotting, "make_candidate_figure", fake_figure)
+    card_json = tmp_path / "c.json"
+    replay_injection.main(["--inject-id", "3", "--dump", str(d), "--out",
+                           str(tmp_path / "t.png"), "--db", str(db), "--no-registry",
+                           "--local-beam", "0", "--card-json", str(card_json)])
+    assert seen["candname"] == "INJECTION: inj_test_0003"
+    assert seen["snr"] == 15.5                     # hella's recovered S/N
+    assert seen["dm"] == DM                        # the ledger DM, not hella's DM + 1.3
+    assert "FWHM" not in json.dumps({k: v for k, v in seen.items() if k != "injection"})
+    card = json.loads(card_json.read_text())
+    assert card["source"] == "injection"
+    assert card["injection"]["summary"].endswith(f"; hella S/N 15.5 at DM {DM + 1.3:.1f}")

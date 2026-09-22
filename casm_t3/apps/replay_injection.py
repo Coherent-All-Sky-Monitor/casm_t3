@@ -193,6 +193,25 @@ def cands_members(cands_dir: Path, obs_utc_start: str, stream: int,
 
 # ----------------------------------------------------------------- card
 
+def injection_summary(inj: dict, cluster: dict | None) -> str:
+    """What went in and what hella made of it, in one line for the Slack thread:
+    'injected DM 585.5, FWHM 11.8 ms, amp 5 counts, S/N 19.3; hella S/N 16.0 at DM 584.5'."""
+    sigma_ms = float(inj.get("sigma_ms") or 0.0)
+    amp = float(inj.get("amp") or 0.0)
+    est = inj.get("est_snr")
+    dm = inj.get("dm")
+    rec_snr = (cluster or {}).get("snr", inj.get("rec_snr"))
+    rec_dm = (cluster or {}).get("dm", inj.get("rec_dm"))
+    text = ("injected " + (f"DM {float(dm):.1f}, " if dm is not None else "")
+            + f"FWHM {injection.fwhm_ms(sigma_ms):.1f} ms, amp {amp:g} counts, S/N "
+            + (f"{float(est):.1f}" if est is not None else "?"))
+    if rec_snr is not None and rec_dm is not None:
+        text += f"; hella S/N {float(rec_snr):.1f} at DM {float(rec_dm):.1f}"
+    else:
+        text += "; not recovered by hella"
+    return text
+
+
 def _width_index(sigma_ms: float, tsamp_s: float) -> int:
     """Boxcar index (ibox) closest to the injected pulse's FWHM."""
     n = injection.fwhm_ms(sigma_ms) / (1000.0 * tsamp_s)
@@ -203,19 +222,13 @@ def build_card(inj: dict, cluster: dict | None, event_utc: datetime,
                beam: int, local_beam: int, stream: int, dm: float, width: int,
                snr: float, members: list, window_s: float,
                registry: weights_registry.Registry | None) -> dict:
-    """A synthetic trigger card for the replay, shaped like a t2d card."""
-    sigma_ms = float(inj.get("sigma_ms") or 0.0)
-    amp = float(inj.get("amp") or 0.0)
-    est = inj.get("est_snr")
-    rec_snr = (cluster or {}).get("snr", inj.get("rec_snr"))
-    rec_dm = (cluster or {}).get("dm", inj.get("rec_dm"))
-    source = (f"injection replay: injected FWHM {injection.fwhm_ms(sigma_ms):.1f} ms, "
-              f"amp {amp:g} counts, injected S/N "
-              + (f"{float(est):.1f}" if est is not None else "?"))
-    if rec_snr is not None and rec_dm is not None:
-        source += f"; hella reported S/N {float(rec_snr):.1f} at DM {float(rec_dm):.1f}"
-    else:
-        source += "; not recovered by hella"
+    """A synthetic trigger card for the replay, shaped like a t2d card.
+
+    ``source`` is just "injection": the figure title carries no replay
+    parameters (Vishnu, 2026-09-22). They are in ``injection.summary``, the
+    one-line text for the Slack thread, and in the ``injection`` block.
+    """
+    source = "injection"
 
     sky = pointings = None
     if registry is not None:
@@ -241,9 +254,10 @@ def build_card(inj: dict, cluster: dict | None, event_utc: datetime,
         "sky": sky,
         "pointings": pointings,
         "trigger_reason": "injection_replay",
-        "injection": {k: inj.get(k) for k in
-                      ("id", "inject_utc", "stream", "beam", "dm", "amp", "sigma_ms",
-                       "est_snr", "file_id", "matched_cluster", "rec_snr", "rec_dm")},
+        "injection": dict({k: inj.get(k) for k in
+                           ("id", "inject_utc", "stream", "beam", "dm", "amp", "sigma_ms",
+                            "est_snr", "file_id", "matched_cluster", "rec_snr", "rec_dm")},
+                          summary=injection_summary(inj, cluster)),
         "context": {"window_s": window_s, "members": members},
     }
 
@@ -334,7 +348,9 @@ def main(argv: list[str] | None = None) -> None:
 
     width = int((cluster or {}).get("width") if cluster and cluster.get("width") is not None
                 else _width_index(sigma_ms, header.tsamp_s))
-    plot_dm = float((cluster or {}).get("dm") or dm)
+    # The figure dedisperses at, and line 2 of its title quotes, the ledger DM
+    # (what was injected); hella's DM is in the card's injection block.
+    plot_dm = float(dm)
 
     trunc_mhz = None
     if not args.no_pulse:
@@ -376,9 +392,10 @@ def main(argv: list[str] | None = None) -> None:
             logger.exception("could not write %s: %s", args.fil, exc)
 
     # The figure reads like any other event: only the name marks it as an
-    # injection ("INJECTION: <id>   <UTC>"), the S/N, DM, width and sky lines
-    # stay exactly as they are for a real candidate, and the injected
-    # parameters live in the card JSON alone (Vishnu, 2026-09-09).
+    # injection ("INJECTION: <id>   <UTC>"); line 2 is hella's recovered S/N
+    # at the ledger DM. The injected parameters live in the card JSON and its
+    # injection.summary line, never in the title (Vishnu, 2026-09-09 and
+    # 2026-09-22).
     # The label a person reads: the ledger's file_id (inj_YYYYMMDD_NNNN),
     # overridable with --label, falling back to the integer row id.
     label = args.label or inj.get("file_id") or str(int(inj["id"]))
@@ -400,6 +417,7 @@ def main(argv: list[str] | None = None) -> None:
 
     print(png)
     print(f"measured boxcar S/N (DM {plot_dm:.2f}, w = {2 ** width}) = {measured:.1f}")
+    print(card["injection"]["summary"])
 
 
 def measure_snr(data2d: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: float,
