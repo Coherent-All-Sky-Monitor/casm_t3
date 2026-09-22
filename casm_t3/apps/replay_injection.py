@@ -250,8 +250,26 @@ def replay_gulp_block(block: dict, event_utc: datetime) -> tuple[dict, int | Non
             row[0] = round(row[0] + shift_s, 4)
         for cl in g.get("clusters") or []:
             cl["peak"][0] = round(cl["peak"][0] + shift_s, 4)
+    # A live injection often fragments into several clusters, all tagged
+    # "injection" by t2d; fold them into the reference so the whole pulse is red.
+    clusters = g.get("clusters") or []
+    main = next((cl for cl in clusters if cl.get("id") == ref.get("id")), None)
+    if main is not None:
+        frags = [cl for cl in clusters if cl is not main and cl.get("outcome") == "injection"]
+        if frags:
+            beams = {int(b): float(v) for b, v in main.get("beams") or []}
+            for cl in frags:
+                for b, v in cl.get("beams") or []:
+                    beams[int(b)] = max(beams.get(int(b), -np.inf), float(v))
+                main["n_trials"] = int(main.get("n_trials") or 0) + int(cl.get("n_trials") or 0)
+            main["beams"] = [[b, v] for b, v in sorted(beams.items())]
+            frag_ids = {cl.get("id") for cl in frags}
+            for row in g.get("trials") or []:
+                if row[5] in frag_ids:
+                    row[5] = main.get("id")
+            g["clusters"] = [cl for cl in clusters if cl.get("id") not in frag_ids]
     for cl in g.get("clusters") or []:
-        if cl.get("id") == ref.get("id"):
+        if cl is main:
             cl["outcome"] = "triggered"
         elif cl.get("outcome") == "triggered":
             cl["outcome"] = "also_triggerable"

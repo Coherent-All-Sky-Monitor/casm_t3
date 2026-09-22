@@ -168,3 +168,27 @@ def test_main_attaches_the_block_or_falls_back(two_file_dump, tmp_path, monkeypa
         assert card["gulp"]["reference"]["cluster_id"] == CID
     else:
         assert "gulp" not in seen and "gulp" not in card
+
+
+def test_injection_fragments_fold_into_the_red_group():
+    """A live injection fragments into several "injection" clusters; the replay
+    draws all of them red, as one group, and leaves real clusters alone."""
+    block = injection_block()
+    others = [cl for cl in block["clusters"] if cl["id"] not in (0, 1)]
+    assert others, "fixture needs a third cluster to act as a fragment"
+    frag = others[0]
+    frag["outcome"] = "injection"
+    frag_beams = {int(b) for b, _ in frag["beams"]}
+    main_beams = {int(b) for b, _ in next(c for c in block["clusters"] if c["id"] == 0)["beams"]}
+    n_expected = sum(1 for row in block["trials"] if row[5] in (0, frag["id"]))
+
+    g, _ = replay_injection.replay_gulp_block(block, _parse_utc(sg.event_utc()))
+    red = [cl for cl in g["clusters"] if cl["outcome"] == "triggered"]
+    assert len(red) == 1 and red[0]["id"] == 0
+    assert {int(b) for b, _ in red[0]["beams"]} == main_beams | frag_beams
+    assert frag["id"] not in {cl["id"] for cl in g["clusters"]}
+    assert sum(1 for row in g["trials"] if row[5] == 0) == n_expected
+    # the real trigger in the gulp is demoted, not merged
+    assert {cl["id"]: cl["outcome"] for cl in g["clusters"]}[1] == "also_triggerable"
+    # the input block is untouched
+    assert frag in block["clusters"] and frag["outcome"] == "injection"
