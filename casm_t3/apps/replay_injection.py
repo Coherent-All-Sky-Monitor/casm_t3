@@ -19,6 +19,7 @@ FIFO is touched, no dump is deleted.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import logging
 import sqlite3
@@ -38,6 +39,9 @@ logger = logging.getLogger("t3.replay_injection")
 DEFAULT_DB = "/mnt/nvme5/casm_pipeline/db/t2.sqlite"
 DEFAULT_CANDS_DIR = "/mnt/nvme4/data/casm/hella_cands"
 DEFAULT_CONTEXT_WINDOW_S = 4.0
+# t2d's injection gulp blocks (casm_t2 docs/CARD_SCHEMA.md, "Injection gulp
+# blocks"): the v3 bottom row of the replay figure.
+DEFAULT_GULP_DIR = "/mnt/nvme5/casm_pipeline/injection_gulps"
 
 
 # --------------------------------------------------------------- ledger
@@ -191,6 +195,72 @@ def cands_members(cands_dir: Path, obs_utc_start: str, stream: int,
                                         arr[keep, 5], arr[keep, 6])]
 
 
+# ------------------------------------------------------------ gulp block
+
+def find_gulp_block(gulp_dir, cluster: dict | None) -> dict | None:
+    """t2d's injection gulp block for the matched cluster, or None.
+
+    Files are ``<utc_start>_g<gulp>_c<cluster_id>.json``; among this gulp's
+    files the one whose ``reference`` is the cluster (by id, else by
+    observation, peak sample and beam) wins. None, never an error, when there
+    is no cluster, no directory or no match: the figure then draws the legacy
+    bottom row.
+    """
+    if not gulp_dir or not cluster or cluster.get("gulp") is None:
+        return None
+    d = Path(gulp_dir)
+    if not d.is_dir():
+        return None
+    cid = cluster.get("id")
+    for p in sorted(d.glob(f"*_g{int(cluster['gulp'])}_*.json")):
+        try:
+            block = json.loads(p.read_text())
+        except (OSError, ValueError) as exc:
+            logger.warning("unreadable gulp block %s: %s", p, exc)
+            continue
+        ref = block.get("reference") or {}
+        if cid is not None and ref.get("cluster_id") == cid:
+            return block
+        if (block.get("utc_start") == cluster.get("obs_utc_start")
+                and ref.get("samp") == cluster.get("samp")
+                and ref.get("beam") == cluster.get("beam")):
+            return block
+    return None
+
+
+def replay_gulp_block(block: dict, event_utc: datetime) -> tuple[dict, int | None]:
+    """The block as the replay card carries it: (block, card samp).
+
+    A copy with the injection cluster as the figure's red group (outcome
+    "triggered"; any cluster that really triggered in the gulp becomes
+    "also_triggerable") and every dt_s re-referenced to ``event_utc`` when it
+    differs from the injection peak by half a sample or more. The card samp is
+    the event's sample, so the figure's gulp span agrees with dt_s.
+    """
+    g = copy.deepcopy(block)
+    ref = g.get("reference") or {}
+    tsamp = float(g.get("tsamp_s") or timing.TSAMP_S)
+    shift_s = 0.0
+    if ref.get("event_utc"):
+        shift_s = (_parse_utc(ref["event_utc"]) - event_utc).total_seconds()
+        if abs(shift_s) < 0.5 * tsamp:
+            shift_s = 0.0
+    if shift_s:
+        for row in g.get("trials") or []:
+            row[0] = round(row[0] + shift_s, 4)
+        for cl in g.get("clusters") or []:
+            cl["peak"][0] = round(cl["peak"][0] + shift_s, 4)
+    for cl in g.get("clusters") or []:
+        if cl.get("id") == ref.get("id"):
+            cl["outcome"] = "triggered"
+        elif cl.get("outcome") == "triggered":
+            cl["outcome"] = "also_triggerable"
+    samp = ref.get("samp")
+    if samp is not None:
+        samp = int(round(int(samp) - shift_s / tsamp))
+    return g, samp
+
+
 # ----------------------------------------------------------------- card
 
 def injection_summary(inj: dict, cluster: dict | None) -> str:
@@ -304,6 +374,9 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--context-window-s", type=float, default=DEFAULT_CONTEXT_WINDOW_S)
     p.add_argument("--no-registry", action="store_true",
                    help="skip the weights-registry sky lookup")
+    p.add_argument("--gulp-dir", default=DEFAULT_GULP_DIR,
+                   help="t2d's injection gulp blocks, for the v3 bottom row; "
+                        "'' to draw the legacy bottom row")
     args = p.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -384,6 +457,23 @@ def main(argv: list[str] | None = None) -> None:
     snr = float((cluster or {}).get("snr") or inj.get("rec_snr") or inj.get("est_snr") or 0.0)
     card = build_card(inj, cluster, event_utc, beam, local_beam, stream, plot_dm,
                       width, snr, members, args.context_window_s, registry)
+    # t2d's gulp block for the injection gulp gives the figure the v3 bottom
+    # row with the injection as the red group. Without one (unrecovered shot,
+    # shots before 2026-09-22) the legacy bottom row is drawn, as before.
+    try:
+        block = find_gulp_block(args.gulp_dir, cluster)
+        if block is not None:
+            card["gulp"], samp = replay_gulp_block(block, event_utc)
+            if samp is not None:
+                card["samp"] = samp
+            logger.info("gulp block: gulp %s, %d trials", block.get("gulp"),
+                        len(block.get("trials") or []))
+        elif cluster:
+            logger.info("no gulp block for cluster %s in %s: legacy bottom row",
+                        cluster.get("id"), args.gulp_dir)
+    except Exception:                                       # noqa: BLE001
+        logger.exception("gulp block unusable: legacy bottom row")
+        card.pop("gulp", None)
 
     if args.fil:
         try:

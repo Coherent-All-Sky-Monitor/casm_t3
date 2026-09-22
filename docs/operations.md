@@ -45,6 +45,17 @@ Injection replays (`t3-replay-injection`) name the figure
 ledger DM. The injected parameters are written to the card JSON as
 `injection.summary`, one line for the Slack thread, and never reach the title.
 
+A replay gets the v3 bottom row when t2d wrote a gulp block for the injection
+gulp (casm_t2 `injection.gulp_dir`, CARD_SCHEMA.md "Injection gulp blocks").
+`--gulp-dir` (default `/mnt/nvme5/casm_pipeline/injection_gulps`, on corr1
+where the replay runs) is searched for the matched cluster's gulp; the block
+whose `reference` is the matched cluster (by id, else by observation, peak
+sample and beam) is attached as `card["gulp"]` with the injection as the red
+("triggered") group. A real event that triggered in the same gulp is drawn
+grey as `also_triggerable`. dt_s is re-referenced when `--event-utc` differs
+from the cluster peak. No block (unrecovered shot, shots before 2026-09-22, or
+`--gulp-dir ''`) gives the legacy bottom row, as before.
+
 Retroactivity: anything baked into the PNG (layout, titles, framing)
 applies from the next event onward, because dumps may already be gone.
 Anything computed from the DB at page-render time — reasons, tables,

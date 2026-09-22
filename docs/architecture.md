@@ -66,8 +66,13 @@ for member beams of any other cluster. A beam in both sets is red only. The
 two-line title counts exactly those markers. The sun, Cas A, Cyg A and
 Tau A markers keep their legend next to the S/N size key.
 
+Injection replay cards (`t3-replay-injection`) carry t2d's injection gulp
+block when one exists, with the injection cluster set to "triggered" in the
+replay's copy, so the injection is the red group and the sky title reads
+"triggered group"; see operations.md.
+
 Row 3 without a `gulp` block (every card t2d wrote before the gulp block
-existed): the pre-v2 panels in their old rectangles. Left, T1 context
+existed, and injection replays with no block): the pre-v2 panels in their old rectangles. Left, T1 context
 members against beam and time, coloured by DM. Right, beams with a member
 within the 0.27 s coincidence window. The sky panel is 6% smaller than it
 was, to clear the DM-time x label.
