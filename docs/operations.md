@@ -23,8 +23,27 @@ Iterating on the candidate figure:
     t3-replot /path/to/card.json.done --out /tmp/test.png
 
 re-renders offline from the on-disk dump, on the node that holds it.
-Never re-queue cards to test plotting — the live plotter may delete the
+When the dump is gone, or the card never had one (T2 backtest cards), it
+renders from the archived single-beam filterbank instead: the card's own
+`fil` if that file exists, else `<events-root>/<candname>/<candname>.fil`
+(default root `/mnt/nvme3/T3/EVENTS`). `--fil PATH` names the file
+explicitly. `--events-root ''` turns the fallback off. A card with no
+`dump_dir` is never looked up in the current directory.
+
+    t3-replot /mnt/nvme3/T3/EVENTS/260922lruuie/260922lruuie.json --out /tmp/x.png
+
+Never re-queue cards to test plotting: the live plotter may delete the
 dump after rendering, and a re-queued card can fire side effects.
+
+The figure's bottom row depends on the card. Cards carrying a `gulp` block
+(written by t2d from the card-gulp-block change on) get the gulp candidate
+histogram, beam scatter and the red/grey sky. Older cards get the pre-v2
+context-member panels under the new top rows. Both are expected.
+
+Injection replays (`t3-replay-injection`) name the figure
+`INJECTION: <file_id>`. Line 2 of the title is hella's recovered S/N at the
+ledger DM. The injected parameters are written to the card JSON as
+`injection.summary`, one line for the Slack thread, and never reach the title.
 
 Retroactivity: anything baked into the PNG (layout, titles, framing)
 applies from the next event onward, because dumps may already be gone.
