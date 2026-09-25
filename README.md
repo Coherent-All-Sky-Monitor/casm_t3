@@ -24,12 +24,14 @@ extracted from the beamforming weights so offline nodes don't need the
 400 MB HDF5.
 
 The daemons: `t3-dump-plotter` (polls the T2 spool, waits for the dump to
-settle, plots, ships artifacts, keeps a per-event archive), `t3-web`
-(FastAPI monitor on :8050 — events with per-event trigger/miss reasons,
-labelling, day stats, an OVRO clock/source panel, injection recovery),
+settle, plots, ships artifacts, keeps a per-event archive),
 `t3-janitor` (size and age quotas on the dump trees; never deletes
 anything labelled frb or pulsar), and `t3-replot` for offline
 re-rendering — use that for all plotter iteration, never card requeue.
+
+The legacy `t3-web` service on 8050 was retired September 25, 2026. Use the
+Candidates tab at `http://localhost:8061/cands`. T2/T3 processing, collection,
+plotters and weights-watch remain running; saved event data were not removed.
 
 ## Weights watch and the beam ellipse
 
