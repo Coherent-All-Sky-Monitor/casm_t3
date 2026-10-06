@@ -55,7 +55,7 @@ def test_restart_transfer_precedes_start(tmp_path, monkeypatch):
     ev = w.handle_transfer(1, t_tr, n)
     assert ev["source"] == "defaults" and ev["product_id"] == reg.lookup_payload("a1")
     assert "bfcorr START within 120 s" in ev["evidence"]
-    assert reg.product_at(t_tr + timedelta(seconds=1))[0]["h5_path"] == "/a.h5"
+    assert reg.product_at(t_tr + timedelta(seconds=1)) == (None, 'partial')
 
 
 def test_defaults_reload_is_identified_and_revert_alerted(tmp_path, monkeypatch):
@@ -82,8 +82,8 @@ def test_defaults_without_any_start(tmp_path, monkeypatch):
     ev = w.handle_transfer(3, t, ww.CB_BYTES)
     assert ev["source"] == "defaults" and ev["product_id"] == reg.lookup_payload("a3")
     assert "no START seen" in ev["evidence"]
-    assert _alert_kinds(reg) == []
-    assert reg.product_at(t + timedelta(seconds=1))[0]["h5_path"] == "/a.h5"
+    assert _alert_kinds(reg) == ['partial_deploy']
+    assert reg.product_at(t + timedelta(seconds=1)) == (None, 'partial')
 
 
 def test_unregistered_defaults_keeps_the_md5_and_alerts(tmp_path, monkeypatch):
@@ -176,6 +176,8 @@ def test_watch_registers_ellipse_from_the_product_h5(tmp_path, monkeypatch):
     assert prod["beam_fwhm_x_deg"] == round(ww.beam_fwhm_from_h5(h5)[0], 3)
     assert prod["beam_fwhm_y_deg"] > 0
     # and it rides out to t2 with the pointings
+    for stream in range(1, 6):
+        reg.record_live_event(utc=utc, stream=stream, payload_md5=f'a{stream}', source='defaults')
     p = reg.pointings_for(utc + timedelta(seconds=1))
     assert p["beam_fwhm_x_deg"] == prod["beam_fwhm_x_deg"]
 

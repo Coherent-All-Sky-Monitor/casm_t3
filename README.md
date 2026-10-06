@@ -41,13 +41,18 @@ T3 always know which product was live at an event time.
 
 Since 2026-09-09 it also gives each product its **beam ellipse**: the E-W and
 N-S FWHM of the synthesised beam, computed with
-`bf_weights_generator.config.compute_beam_fwhm` from the product's own h5
-(`array_config/positions_enu` masked by `array_config/active_mask`, i.e. only
-the antennas included in beamforming) at that h5's band centre. T2 clusters
+`bf_weights_generator.beam_metadata.beam_fwhm_from_h5` from the product's own h5.
+It uses positions of nonzero CB slots across every channel, polarization and
+beam, at the saved mean frequency. Metadata-only legacy files use `active_mask`.
+The canonical uploader now uses this same lambda/D helper before its live events;
+the watcher remains a fallback for missing widths. This union ellipse is not an
+exact per-beam response. T2 clusters
 candidates on the sky with those FWHMs as its link scales, so the clustering
 ellipse now follows the deployed weights instead of a constant in
 `config/t2d.yaml` — those config values are the fallback for a product with no
-ellipse. Everything is fail-soft: an unreadable h5 or a missing generator logs
+ellipse. T2's product and width caches now refresh changed metadata. Missing or
+mixed six-stream evidence is partial, not a trustworthy single pointing; watcher
+alerts describe that distinction. Everything is fail-soft: an unreadable h5 or a missing generator logs
 a warning and leaves the product without an ellipse.
 
 Products registered before that date carry no ellipse. Fill them in with

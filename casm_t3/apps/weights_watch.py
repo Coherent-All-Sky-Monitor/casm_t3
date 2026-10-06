@@ -134,52 +134,11 @@ def defaults_payload_md5(stream: int, timeout_s: float = 120.0) -> str | None:
 
 
 def beam_fwhm_from_h5(h5_path: str | Path) -> tuple[float, float] | None:
-    """(E-W, N-S) beam FWHM in degrees for the enabled antennas of a weights h5.
-
-    Returns None (with a warning) for anything unreadable: no file, no
-    ``array_config/positions_enu``, no h5py/bf_weights_generator in this
-    interpreter. The reference frequency is the h5's own band centre
-    (``frequencies_hz``), which is what these weights actually beamform; without
-    it ``compute_beam_fwhm`` falls back to its own 437.5 MHz band centre.
-    """
+    """Shared upload/backfill geometry estimate; unreadable metadata stays unknown."""
     try:
-        import h5py
-        import numpy as np
-        from bf_weights_generator.config import compute_beam_fwhm
-    except ImportError as exc:
-        logger.warning("beam FWHM not computed (%s); the product keeps no ellipse", exc)
-        return None
-    try:
-        with h5py.File(str(h5_path), "r") as f:
-            grp = f.get("array_config")
-            if grp is None or "positions_enu" not in grp:
-                logger.warning("no array_config/positions_enu in %s; the product keeps no ellipse", h5_path)
-                return None
-            pos = np.asarray(grp["positions_enu"][:], dtype=float)
-            mask = None
-            for key in ("active_mask", "include_in_beamforming", "enabled_mask"):
-                if key in grp:
-                    mask = np.asarray(grp[key][:], dtype=bool)
-                    break
-            if mask is not None and mask.shape[0] == pos.shape[0]:
-                pos = pos[mask]
-            elif mask is not None:
-                logger.warning("enabled mask in %s does not match positions (%s vs %s); using all positions",
-                               h5_path, mask.shape, pos.shape)
-            freq_hz = None
-            if "frequencies_hz" in f:
-                freqs = np.asarray(f["frequencies_hz"][:], dtype=float)
-                if freqs.size:
-                    freq_hz = float(freqs.mean())
-        if pos.ndim != 2 or pos.shape[0] == 0 or pos.shape[1] < 2:
-            logger.warning("positions_enu in %s has shape %s; the product keeps no ellipse", h5_path, pos.shape)
-            return None
-        fwhm_ew, fwhm_ns = compute_beam_fwhm(pos, freq_hz=freq_hz)
-        logger.info("beam ellipse from %s: %.3f deg E-W x %.3f deg N-S (%d enabled antennas, %.3f MHz)",
-                    h5_path, fwhm_ew, fwhm_ns, pos.shape[0],
-                    (freq_hz or 437.5e6) / 1e6)
-        return float(fwhm_ew), float(fwhm_ns)
-    except (OSError, ValueError, KeyError) as exc:
+        from bf_weights_generator.beam_metadata import beam_fwhm_from_h5 as read_widths
+        return read_widths(h5_path)
+    except (ImportError, OSError, ValueError, KeyError) as exc:
         logger.warning("beam FWHM from %s failed (%s); the product keeps no ellipse", h5_path, exc)
         return None
 
@@ -345,7 +304,7 @@ class Watcher:
                         "the last upload was made without --save-defaults")
         prod, status = self.reg.product_at(utc + timedelta(seconds=1))
         if status == "partial":
-            self._alert("partial_deploy", f"bfcorr streams carry different weights products after stream {stream} "
+            self._alert("partial_deploy", f"bfcorr streams have mixed or incomplete weights evidence after stream {stream} "
                                           f"loaded at {utc.isoformat(timespec='seconds')}; no single beam pointing exists")
 
     def _alert(self, kind: str, text: str) -> None:
