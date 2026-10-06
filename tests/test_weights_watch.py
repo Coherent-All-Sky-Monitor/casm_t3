@@ -4,6 +4,7 @@ The log lines quoted here are verbatim from /data/casm/logs on corr1 around the
 2026-09-02 21:07 UTC and 2026-09-04 16:41 UTC obs restarts.
 """
 import json
+import pytest
 from datetime import datetime, timedelta, timezone
 
 from casm_t2 import weights_registry as wr
@@ -115,6 +116,78 @@ def test_upload_match_and_ib_transfer_ignored(tmp_path, monkeypatch):
     w = ww.Watcher(reg, alert=False)
     assert w.handle_transfer(1, t0 + timedelta(seconds=4), ww.CB_BYTES) is None      # the upload itself
     assert w.handle_transfer(1, t0 + timedelta(seconds=4), 67584) is None            # IB transfer ignored
+
+
+def test_live_transfer_waits_for_late_upload_despite_remote_clock_skew(tmp_path, monkeypatch):
+    reg = _reg(tmp_path)
+    clock = [100.0]
+    monkeypatch.setattr(ww.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(ww, 'node_clock_offset', lambda host: (150., .2))
+    monkeypatch.setattr(ww, 'defaults_payload_md5', lambda *a: pytest.fail('Must not infer disk defaults'))
+    w = ww.Watcher(reg, alert=False)
+    t = datetime.now(timezone.utc) - timedelta(seconds=1)
+    w.observe_transfer(3, t + timedelta(seconds=150), ww.CB_BYTES)
+    w.flush_pending()
+    assert len(w.pending) == 1 and reg.events() == []
+    clock[0] += 30
+    reg.record_live_event(utc=t + timedelta(seconds=15), stream=3, payload_md5='b3', source='upload')
+    w.flush_pending()
+    assert not w.pending
+    assert len(reg.events()) == 1
+    assert _alert_kinds(reg) == []
+
+
+def test_live_restart_normalizes_clock_and_preserves_same_clock_start_match(tmp_path, monkeypatch):
+    reg = _reg(tmp_path)
+    clock = [100.0]
+    monkeypatch.setattr(ww.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(ww, 'node_clock_offset', lambda host: (150., .2))
+    monkeypatch.setattr(ww, 'defaults_payload_md5', lambda s: f'a{s}')
+    w = ww.Watcher(reg, alert=False)
+    t = datetime.now(timezone.utc) - timedelta(seconds=1)
+    raw = t + timedelta(seconds=150)
+    w.observe_transfer(3, raw, ww.CB_BYTES)
+    w.note_start(3, raw + timedelta(milliseconds=100))
+    clock[0] += 61
+    w.flush_pending()
+    ev = reg.events()[0]
+    assert ev['source'] == 'defaults'
+    assert abs((datetime.fromisoformat(ev['utc']) - t).total_seconds()) < .001
+    assert 'bfcorr START' in ev['evidence']
+    assert raw.isoformat() in ev['evidence'] and '150.000 s' in ev['evidence']
+    w.flush_pending()
+    assert len(reg.events()) == 1
+
+
+@pytest.mark.parametrize('offset', [None, (0., .1)])
+def test_future_log_cannot_override_uploader_when_clock_probe_fails(tmp_path, monkeypatch, offset):
+    reg = _reg(tmp_path)
+    monkeypatch.setattr(ww, 'node_clock_offset', lambda host: offset)
+    w = ww.Watcher(reg, alert=False)
+    before = datetime.now(timezone.utc)
+    w.observe_transfer(5, before + timedelta(seconds=150), ww.CB_BYTES)
+    assert before <= w.pending[0].utc <= datetime.now(timezone.utc)
+    assert 'observation upper bound' in w.pending[0].timing_evidence
+
+
+def test_partial_upload_never_infers_old_defaults_without_start(tmp_path, monkeypatch):
+    reg = _reg(tmp_path)
+    monkeypatch.setattr(ww, 'defaults_payload_md5', lambda s: f'a{s}')
+    t = datetime.now(timezone.utc)
+    reg.record_live_event(utc=t, stream=0, payload_md5='b0', source='upload')
+    w = ww.Watcher(reg, alert=False)
+    ev = w.handle_transfer(3, t, ww.CB_BYTES, protect_uploads=True)
+    assert ev['source'] == 'unknown' and ev['payload_md5'] is None
+    assert 'defaults MD5 a3 (not FIFO identity)' in ev['evidence']
+    assert _alert_kinds(reg) == ['unmatched_upload_transfer']
+
+
+@pytest.mark.parametrize('option', ['--from-start', '--once'])
+def test_replay_cannot_reintroduce_events_into_live_registry(monkeypatch, option):
+    monkeypatch.setattr(ww, 'Tail', lambda *a,**k: pytest.fail('Must refuse before opening logs'))
+    with pytest.raises(SystemExit) as exc:
+        ww.main([option, '--no-slack'])
+    assert exc.value.code == 2
 
 
 # --------------------------------------------------------------- beam ellipse

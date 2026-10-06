@@ -36,8 +36,27 @@ plotters and weights-watch remain running; saved event data were not removed.
 ## Weights watch and the beam ellipse
 
 `t3-weights-watch` tails the medusa weights log and records in
-`casm_t2.weights_registry` every weights load that was not an upload, so T2 and
-T3 always know which product was live at an event time.
+`casm_t2.weights_registry` identified non-upload loads. Unknown or mixed loads
+leave coordinates unavailable rather than inheriting an unrelated beam table.
+
+Live-tail transfers wait up to 60 seconds (`--upload-grace-s`) for the uploader's
+per-stream receipt. Remote log times are corrected using a read-only SSH clock
+probe, cached five minutes; the original time and uncertainty remain in evidence.
+A failed probe uses the local observation upper bound. No host clock is changed.
+START matching uses two raw times from the same node. An unmatched transfer near
+an upload, without a START, stays unknown instead of being assigned disk defaults.
+There is a bounded attribution delay while a transfer waits; this is not fresh
+GPU identity. `--from-start` / `--once` retain historical log clocks and refuse
+the live registry path; use a separate registry copy for review. A missing START
+near an upload remains ambiguous even when disk defaults match a known product:
+the observed defaults hash is retained in evidence, not asserted as FIFO identity.
+The pending queue is in memory, so do not restart the watcher during a transfer's
+grace period. Historical clock steps cannot be reconstructed from a current probe.
+
+The October 6 timing-race repair is narrowly guarded in
+`scripts/repair_20261006_upload_events.py`, dry-run unless `--apply` is supplied.
+It backs up the event file, preserves corrected rows under `original`, and never
+uploads or posts to Slack. See `casm-wiki/evidence/2026-10-06/upload-registry-race.md`.
 
 Since 2026-09-09 it also gives each product its **beam ellipse**: the E-W and
 N-S FWHM of the synthesised beam, computed with

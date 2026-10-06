@@ -26,9 +26,17 @@ returned "unknown" for the rest of the day). The START is therefore treated as
 corroboration only, matched within +/- ``restart_window_s`` in either direction,
 and identification rests on the payload itself.
 
-For each CB-sized transfer with no upload event within ``match_window_s`` the
-watch hashes the defaults file the owning node holds (read-only; corr2 over ssh)
-and looks the md5 up in the registry:
+Live tail first converts transfer time to the watcher's corr1 clock using a
+read-only remote ``date`` probe (cached five minutes, <=2 s round trip). Probe
+failure uses local observation time as an upper bound; future times are clamped
+to that bound. Original log times and offset uncertainty stay in the evidence.
+START matching compares raw transfer and START times from the SAME node.
+
+CB transfers wait up to ``grace_s`` (default 60 s) for uploader events before
+defaults inference. This is a bounded attribution delay, not an activation
+acknowledgement. Without a START, a nearby partial upload suppresses defaults
+inference. Otherwise the watch hashes the owning node's defaults (read-only;
+corr2 over ssh) and looks the md5 up in the registry:
 
 * md5 is a registered product -> source=defaults, evidence records whether a
   bfcorr START was seen (a restart) or not (casm-lmc re-pushing the same
@@ -36,7 +44,10 @@ and looks the md5 up in the registry:
 * md5 is not registered -> source=unknown_defaults, the md5 is stored anyway so
   the payload can be identified later by registering it, and an alert is raised;
 * hashing failed (node down, ssh refused) -> payload_md5 None and an alert; this
-  is the only path that leaves a load unidentified.
+  leaves a load unidentified, as does ambiguous upload/default evidence.
+
+Whole-log replay keeps historical node times; today's clock offset cannot
+correct those. Never replay historic logs into production without time review.
 
 Alerts (defaults differ from the newest upload = the array reverted; streams
 disagree = partial deploy; unknown or unhashable payload) go to the registry's
@@ -73,6 +84,7 @@ import re
 import subprocess
 import time
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -131,6 +143,38 @@ def defaults_payload_md5(stream: int, timeout_s: float = 120.0) -> str | None:
     except (OSError, subprocess.SubprocessError) as exc:
         logger.error("md5 on %s failed: %s", host, exc)
         return None
+
+
+def node_clock_offset(host: str) -> tuple[float, float] | None:
+    """Read remote clock minus watcher clock, seconds, with half-RTT uncertainty.
+
+    This reads `date` over SSH; it never sets either clock. Reject slow probes.
+    """
+    if host == "casm-corr1":
+        return 0.0, 0.0
+    before = time.time()
+    started = time.monotonic()
+    try:
+        result = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+                                 host, "date +%s.%N"], capture_output=True, text=True, timeout=6)
+        elapsed = time.monotonic() - started
+        if result.returncode or elapsed > 2:
+            return None
+        remote = float(result.stdout.strip())
+        if not (0 < remote < 1e11):
+            return None
+        return remote - (before + elapsed / 2), elapsed / 2
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+@dataclass
+class PendingTransfer:
+    stream: int
+    log_utc: datetime
+    utc: datetime
+    deadline: float
+    timing_evidence: str
 
 
 def beam_fwhm_from_h5(h5_path: str | Path) -> tuple[float, float] | None:
@@ -223,12 +267,59 @@ class Tail:
 
 class Watcher:
     def __init__(self, registry: wr.Registry, match_window_s: float = 20.0,
-                 restart_window_s: float = 120.0, alert: bool = True):
+                 restart_window_s: float = 120.0, alert: bool = True,
+                 grace_s: float = 60.0):
         self.reg = registry
         self.match_window = timedelta(seconds=match_window_s)
         self.restart_window = timedelta(seconds=restart_window_s)
         self.alert = alert
         self.recent_starts: dict[int, deque[datetime]] = {}
+        self.grace_s = grace_s
+        self.pending: list[PendingTransfer] = []
+        self.clock_offsets: dict[str, tuple[float, tuple[float, float] | None]] = {}
+
+    def observe_transfer(self, stream: int, log_utc: datetime, nbytes: int) -> None:
+        """Live tail: normalize the log clock and defer defaults inference.
+
+        STARTs stay in raw node time, so restart matching compares two readings
+        of the SAME clock. Replay uses handle_transfer directly, without applying
+        today's measured offset to historical log lines.
+        """
+        if nbytes != CB_BYTES:
+            return
+        observed = datetime.now(timezone.utc)
+        host = wr.STREAM_HOST[stream]
+        cached = self.clock_offsets.get(host)
+        if cached is None or time.monotonic() - cached[0] > 300:
+            cached = (time.monotonic(), node_clock_offset(host))
+            self.clock_offsets[host] = cached
+        offset = cached[1]
+        if offset is None:
+            utc = observed
+            timing = "clock probe unavailable; UTC is corr1 observation upper bound"
+        else:
+            utc = log_utc - timedelta(seconds=offset[0])
+            timing = f"node clock offset {offset[0]:.3f} s +/- {offset[1]:.3f} s"
+            if utc > observed:
+                utc = observed
+                timing += "; UTC clamped to corr1 observation upper bound"
+        timing = f"raw log UTC {log_utc.isoformat()}; {timing}"
+        self.pending.append(PendingTransfer(stream, log_utc, utc,
+                                            time.monotonic() + self.grace_s, timing))
+        logger.info("pending stream %d transfer: %s", stream, timing)
+
+    def flush_pending(self) -> None:
+        """Resolve after an upload receipt arrives, or after the grace expires."""
+        waiting = []
+        for item in self.pending:
+            if self.upload_matches(item.stream, item.utc):
+                logger.info("stream %d pending transfer matched upload; %s", item.stream, item.timing_evidence)
+            elif time.monotonic() >= item.deadline:
+                self.handle_transfer(item.stream, item.utc, CB_BYTES, log_utc=item.log_utc,
+                                     timing_evidence=item.timing_evidence, protect_uploads=True)
+            else:
+                waiting.append(item)
+        self.pending = waiting
 
     def note_start(self, stream: int, utc: datetime) -> None:
         self.recent_starts.setdefault(stream, deque(maxlen=STARTS_KEPT)).append(utc)
@@ -253,7 +344,9 @@ class Watcher:
                 break
         return False
 
-    def handle_transfer(self, stream: int, utc: datetime, nbytes: int) -> dict | None:
+    def handle_transfer(self, stream: int, utc: datetime, nbytes: int, *,
+                        log_utc: datetime | None = None, timing_evidence: str = "",
+                        protect_uploads: bool = False) -> dict | None:
         if nbytes != CB_BYTES:
             return None                     # IB weights or partial; not a pointing change
         if self.upload_matches(stream, utc):
@@ -262,10 +355,25 @@ class Watcher:
             if prod is not None:
                 ensure_product_fwhm(self.reg, prod.get("product_id"))
             return None
-        started = self.start_near(stream, utc)
+        started = self.start_near(stream, log_utc or utc)
         seen = ("bfcorr START within %.0f s" % self.restart_window.total_seconds()
                 if started is not None else "no START seen")
+        if timing_evidence:
+            seen += f"; {timing_evidence}"
         md5 = defaults_payload_md5(stream)
+        # Disk defaults do not identify an uncorroborated FIFO load during an
+        # upload. A failed/partial uploader must remain unknown, not be labelled
+        # with whichever defaults happened to be on disk when this poll ran.
+        if protect_uploads and started is None and any(
+                ev.get("source") == "upload" and
+                abs(datetime.fromisoformat(ev["utc"]) - utc) <= timedelta(minutes=10)
+                for ev in self.reg.events()):
+            event = self.reg.record_live_event(utc=utc, stream=stream, payload_md5=None,
+                source="unknown", evidence=f"Unmatched FIFO transfer near an upload; defaults inference withheld; "
+                f"observed on-disk defaults MD5 {md5 or 'unavailable'} (not FIFO identity); {seen}")
+            self._alert("unmatched_upload_transfer", f"stream {stream} has an unmatched transfer near an upload; "
+                        "check upload receipts and consumer logs before assigning beam coordinates")
+            return event
         when = utc.isoformat(timespec="seconds")
         if md5 is None:
             ev = self.reg.record_live_event(
@@ -320,6 +428,8 @@ def main(argv=None) -> None:
     p.add_argument("--weights-log", default=str(WEIGHTS_LOG))
     p.add_argument("--bfcorr-log", default=str(BFCORR_LOG))
     p.add_argument("--interval-s", type=float, default=5.0)
+    p.add_argument("--upload-grace-s", type=float, default=60.0,
+                   help="Live-tail delay before inferring a defaults reload (default 60 s)")
     p.add_argument("--from-start", action="store_true", help="replay the whole logs instead of tailing from now")
     p.add_argument("--once", action="store_true", help="process what is already in the logs and exit (replay)")
     p.add_argument("--no-slack", action="store_true")
@@ -329,6 +439,8 @@ def main(argv=None) -> None:
                    help="with --backfill-fwhm: print what would be written, write nothing")
     p.add_argument("--log-file")
     args = p.parse_args(argv)
+    if (args.from_start or args.once) and Path(args.registry).resolve() == wr.REGISTRY_DIR.resolve():
+        p.error("Replay requires --registry pointing to a separate copy, never the live registry")
     logging.basicConfig(filename=args.log_file, level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
     if args.backfill_fwhm:
@@ -340,7 +452,7 @@ def main(argv=None) -> None:
                     else f"{r['fwhm_x']:.3f} x {r['fwhm_y']:.3f} deg (E-W x N-S)")
             print(f"  {r['product_id']}  {r['status']:<12} {fwhm}  {r['h5_path']}")
         return
-    watcher = Watcher(wr.Registry(args.registry), alert=not args.no_slack)
+    watcher = Watcher(wr.Registry(args.registry), alert=not args.no_slack, grace_s=args.upload_grace_s)
     wtail = Tail(Path(args.weights_log), start_at_end=not args.from_start)
     btail = Tail(Path(args.bfcorr_log), start_at_end=not args.from_start)
     logger.info("watching %s and %s, registry %s", args.weights_log, args.bfcorr_log, args.registry)
@@ -352,7 +464,11 @@ def main(argv=None) -> None:
         for line in wtail.lines():
             tr = parse_transfer(line)
             if tr:
-                watcher.handle_transfer(*tr)
+                if args.from_start or args.once:
+                    watcher.handle_transfer(*tr, timing_evidence="replay: original node log clock, offset unknown")
+                else:
+                    watcher.observe_transfer(*tr)
+        watcher.flush_pending()
         if args.once:
             return
         time.sleep(args.interval_s)
