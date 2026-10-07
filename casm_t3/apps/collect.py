@@ -26,12 +26,14 @@ import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from casm_t2 import logsetup
 
 from casm_t3 import alerts
 
 logger = logging.getLogger("t3.collect")
+PACIFIC = ZoneInfo("America/Los_Angeles")
 
 
 def _rsync(remote: str, dest: Path) -> None:
@@ -58,13 +60,29 @@ def _mirror_marker(events_dest: Path | None, name: str, text: str) -> None:
         logger.warning("could not mark %s: %s", event_dir, exc)
 
 
+def _event_clocks(value) -> str:
+    """UTC and Pacific event clocks; show the local date when it differs."""
+    try:
+        event = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return "time unavailable"
+    # Legacy event_utc values without an offset still describe UTC, not the
+    # collector host's local timezone.
+    if event.tzinfo is None:
+        event = event.replace(tzinfo=timezone.utc)
+    utc = event.astimezone(timezone.utc)
+    local = utc.astimezone(PACIFIC)
+    local_format = "%H:%M:%S %Z" if local.date() == utc.date() else "%Y-%m-%d %H:%M:%S %Z"
+    return f"{utc:%Y-%m-%d %H:%M:%S} UTC · {local.strftime(local_format)}"
+
+
 def _caption(meta: dict, web_base: str) -> str:
-    """DSA-110 card style: *name* — 12.9σ, DM 239.7 pc cm⁻³, <UTC> UTC."""
+    """One text line: linked candidate ID, search S/N, DM, UTC and PST/PDT."""
     name = meta.get("candname", "?")
-    utc = str(meta.get("event_utc", "")).replace("T", " ")[:19]
-    return (f"*{name}* — {meta.get('snr', 0):.1f}σ, "
-            f"DM {meta.get('dm', 0):.1f} pc cm⁻³, {utc} UTC | "
-            f"<{web_base}/cands/{name}|Open in dashboard>")
+    link = f"<{web_base.rstrip('/')}/cands/{name}|{name}>"
+    return (f"*{link}* — {meta.get('snr', 0):.1f}σ, "
+            f"DM {meta.get('dm', 0):.1f} pc cm⁻³, "
+            f"{_event_clocks(meta.get('event_utc'))}")
 
 
 def _post_new(candidates: Path, web_base: str, max_age_h: float,

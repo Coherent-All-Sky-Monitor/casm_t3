@@ -9,7 +9,7 @@ per node or they die at logout.
 |---|---|---|
 | t3-dump-plotter-corr1 | corr1 | plot local dumps |
 | t3-dump-plotter-corr2 | corr2 | plot local dumps, stage artifacts |
-| t3-collect | corr1 | pull corr2 artifacts and events (corr2 cannot ssh back); post candidates to Slack, "Open in dashboard" -> casm_monitor `http://localhost:8061/cands/<name>` (`--web-base`) |
+| t3-collect | corr1 | pull corr2 artifacts and events (corr2 cannot ssh back); post candidates to Slack, clickable candidate ID -> casm_monitor `http://localhost:8061/cands/<name>` (`--web-base`) |
 | t3-web | corr1 | Retired September 25, 2026; stopped/disabled. Use casm_monitor on 8061. |
 | t3-janitor | corr1 | disk quota sweep across both nodes |
 
@@ -84,6 +84,17 @@ corr1 by t3-collect. It is not under the janitor's quota, so watch
 
 Slack alerts no-op silently until a bot token exists at
 `~/.config/slack_api`.
+
+New candidate captions link the candidate ID directly to its 8061 event page
+and show the search S/N, DM, UTC event time and Pacific event time on one text
+line. Pacific time uses `America/Los_Angeles`, choosing PST/PDT for the event
+date. If the local date differs from UTC, both dates are shown. The separate
+"Open in dashboard" label is omitted to save space; Slack may still wrap on a
+narrow display. Readers need their usual SSH tunnel to localhost:8061.
+
+After a caption change, reload only `t3-collect` between posting passes. Keep
+all `.slack` markers so already-posted events remain untouched. T2, plotters,
+the monitor, weights and injection routing need no restart or change.
 
 ## Failure isolation
 
