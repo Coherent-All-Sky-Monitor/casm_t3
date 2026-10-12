@@ -116,7 +116,8 @@ default` or `KEY=VAL,...`) is a stage hella does not have, for offline
 comparison: SumThreshold (Offringa et al. 2010) along time against a
 channel-neighbour reference. For each window M = mmin, 2 mmin, ... mmax
 (defaults 16 to 512 samples) the standardised gulp is box-averaged over M
-samples, the reference is the median over the nb (default 4) channels on
+samples (window clamped inside the gulp, hella's running-median rule, so
+the edge bins see the first or last full window and no extra noise), the reference is the median over the nb (default 4) channels on
 either side of that averaged data, and a window whose |self - reference|
 exceeds chi1 / rho**log2(M) (defaults 8 and 1.5, so 1.58 sigma on the
 16-sample mean down to 0.21 sigma on the 512-sample mean) is flagged over

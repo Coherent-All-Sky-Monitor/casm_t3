@@ -145,6 +145,22 @@ def running_median_clamped(x: np.ndarray, w: int) -> np.ndarray:
     return out
 
 
+def _box_mean_clamped(x: np.ndarray, w: int) -> np.ndarray:
+    """Running mean over ``w`` samples along the last axis, window clamped
+    inside the series: output t uses the window starting at
+    clip(t - w//2, 0, n - w), so an edge sample sees the first or last full
+    window and the noise of the mean is the same everywhere."""
+    n = x.shape[-1]
+    w = min(int(w), n)
+    cs = np.cumsum(x, axis=-1, dtype=np.float64)
+    full = np.empty(x.shape[:-1] + (n - w + 1,), dtype=np.float64)
+    full[..., 0] = cs[..., w - 1]
+    full[..., 1:] = cs[..., w:] - cs[..., :n - w]
+    full /= w
+    idx = np.clip(np.arange(n) - w // 2, 0, n - w)
+    return full[..., idx]
+
+
 def _standardise(d: np.ndarray, flagged: np.ndarray | None = None) -> np.ndarray:
     """hella bandpass_correct: (x - mean) / std per channel over the gulp (plain
     moments, not median/MAD); a channel with zero or non-finite variance is 0.
@@ -216,7 +232,7 @@ def sumthreshold_flag(d: np.ndarray, chi1: float = 8.0, rho: float = 1.5, mmin: 
     in ``mask`` (the static mask range) are excluded from the reference and
     never flagged. Returns the boolean mask.
     """
-    from scipy.ndimage import maximum_filter1d, median_filter, uniform_filter1d
+    from scipy.ndimage import maximum_filter1d, median_filter
 
     nchan, ntime = d.shape
     flagged = np.zeros(d.shape, dtype=bool)
@@ -227,9 +243,11 @@ def sumthreshold_flag(d: np.ndarray, chi1: float = 8.0, rho: float = 1.5, mmin: 
     m = max(1, int(mmin))
     while m <= mmax:
         thresh = chi1 / rho ** np.log2(m)
-        # reflect at the time edges: "nearest" would pad a window at the gulp
-        # edge with copies of one sample and trip the threshold there
-        avg = work if m == 1 else uniform_filter1d(work, m, axis=1, mode="reflect")
+        # the window is clamped inside the gulp (hella's running-median rule):
+        # "nearest" pads an edge window with copies of one sample, "reflect"
+        # counts ~half the window twice; both double the edge noise and trip
+        # the threshold on the first and last bins of every gulp
+        avg = work if m == 1 else _box_mean_clamped(work, m)
         ref = median_filter(avg, size=(2 * nb + 1, 1), mode="nearest")
         hit = np.abs(avg - ref) > thresh
         if m > 1:
