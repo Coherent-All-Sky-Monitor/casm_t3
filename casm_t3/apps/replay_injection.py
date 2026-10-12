@@ -403,6 +403,10 @@ def main(argv: list[str] | None = None) -> None:
                    help="with --clean hella: replace the deployed (never-firing) SCRUNCH "
                         "stage by these, in order, e.g. --scrunch 1,1,5 --scrunch 16,1,4; "
                         "hella semantics (box-average, cut at SIGMA/sqrt(T*F), grow, replace)")
+    p.add_argument("--sumthreshold", metavar="KEY=VAL,...", default=None,
+                   help="with --clean hella: add a SumThreshold stage against a channel-"
+                        "neighbour reference after the scrunch stages; 'default' or e.g. "
+                        "chi1=8,rho=1.5,mmin=16,mmax=512,nb=4,grow_t=0 (single_pulse.sumthreshold_flag)")
     args = p.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -519,16 +523,19 @@ def main(argv: list[str] | None = None) -> None:
     plot_card = dict(card, candname=f"INJECTION: {label}{suffix}", source="blind")
     clean = None if args.clean == "none" else args.clean
     scrunches = [single_pulse.parse_scrunch(x) for x in args.scrunch] if args.scrunch else None
+    sumthreshold = (single_pulse.parse_sumthreshold(args.sumthreshold)
+                    if args.sumthreshold is not None else None)
     png = plotting.make_candidate_figure(beam2d, header.freqs_mhz, header.tsamp_s,
                                          t_rel, plot_card, Path(args.out), layout=args.layout,
                                          subbands=args.subbands, clean=clean,
-                                         scrunches=scrunches)
+                                         scrunches=scrunches, sumthreshold=sumthreshold)
 
     measured = measure_snr(beam2d, header.freqs_mhz, header.tsamp_s, plot_dm, width, t_rel)
     card["replay"] = {"dump_files": [str(f) for f in files], "n_samples": int(ntime),
                       "pulse_added": not args.no_pulse, "pulse_sample": c0,
                       "clean": clean,
                       "scrunches": None if not scrunches else [list(st) for st in scrunches],
+                      "sumthreshold": sumthreshold,
                       "truncated_below_mhz": (None if trunc_mhz is None
                                               else round(trunc_mhz, 2)),
                       "measured_boxcar_snr": round(measured, 2), "plot": str(png)}

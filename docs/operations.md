@@ -54,6 +54,17 @@ from 1 to 60 ms FWHM and 6 to 250 counts stays above S/N 30 (bright ones are
 reduced, e.g. 648 -> 33 at 26.6 ms, 100 counts). The `(1,16,8)` stage adds
 nothing on this RFI; `(16,1,8)` does the work. Nothing of this is live.
 
+`--sumthreshold default` (or `KEY=VAL,...`) adds the channel-neighbour
+SumThreshold stage (architecture.md). Same trial, same day
+(`st_compare.py`): zero hot channels left, 0.3-0.5 % of the band flagged,
+6-10 channels blanked per gulp; dim pulses unchanged (6-15 counts within a
+few percent of the deployed chain at every width 1-60 ms) and bright ones
+13-15 % *above* the deployed chain (120 counts: 776 -> 898; 26.6 ms, 250
+counts: 1447 -> 1650), because the RFI noise is gone and nothing broadband
+is flagged. Combining it with `(1,1,5)` brings the amplitude cliff back
+(400 counts: 2033 -> 248); do not. Report with figures:
+`/mnt/nvme5/casm_pipeline/scratchpad/hella_clean_20261012/hella_cleaning_replay.html`.
+
 Never re-queue cards to test plotting: the live plotter may delete the
 dump after rendering, and a re-queued card can fire side effects.
 

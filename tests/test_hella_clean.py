@@ -140,3 +140,39 @@ def test_parse_scrunch():
         single_pulse.parse_scrunch("16,1")
     with pytest.raises(ValueError):
         single_pulse.parse_scrunch("0,1,5")
+
+
+def test_sumthreshold_flags_single_channel_bursts_not_broadband():
+    """A channel-neighbour reference: single-channel bursts of 0.1-1 s at 0.5-3
+    sigma are flagged; a broadband 2 s zero-DM ramp and a dispersed pulse are
+    not, whatever their brightness; pure noise loses under 2 % of its pixels."""
+    rng = np.random.default_rng(7)
+    nchan, ntime = 1024, 4096
+    d = rng.normal(0, 1, (nchan, ntime))
+    d[500, 2000:2300] += 3.0
+    d[600, 1000:1100] += 1.0
+    d[700, 2500:3500] += 0.5
+    t = np.arange(ntime)
+    d += (20.0 * np.exp(-0.5 * ((t - 1500) / 400.0) ** 2))[None, :]      # bright broadband
+    freqs = 484.375 - np.arange(nchan) * 0.030517578125
+    delays = np.round(4.148808e3 * 300 * (freqs ** -2 - freqs.max() ** -2) / TSAMP).astype(int)
+    pulse = np.zeros_like(d, dtype=bool)
+    for c in range(nchan):
+        d[c, 300 + delays[c]: 304 + delays[c]] += 8.0                       # 8 sigma per pixel
+        pulse[c, 300 + delays[c]: 304 + delays[c]] = True
+    m = single_pulse.sumthreshold_flag(d, mask=(0, 100))
+    assert m[500, 2000:2300].mean() > 0.9
+    assert m[600, 1000:1100].mean() > 0.9
+    assert m[700, 2500:3500].mean() > 0.8        # ends of a faint line are partly missed
+    assert m[pulse].mean() < 0.03                     # the pulse is not singled out
+    assert m[:, 1300:1700].mean() < 0.03              # nor the broadband ramp
+    assert not m[:100].any()                          # static-mask range never flagged
+    assert m[101:, 3600:].mean() < 0.02               # pure noise
+
+
+def test_parse_sumthreshold():
+    assert single_pulse.parse_sumthreshold("default") == single_pulse.SUMTHRESHOLD_DEFAULTS
+    cfg = single_pulse.parse_sumthreshold("chi1=6,nb=16,mmax=128,mmin=8")
+    assert cfg["chi1"] == 6.0 and cfg["nb"] == 16 and cfg["mmax"] == 128 and cfg["mmin"] == 8
+    with pytest.raises(ValueError):
+        single_pulse.parse_sumthreshold("bogus=1")

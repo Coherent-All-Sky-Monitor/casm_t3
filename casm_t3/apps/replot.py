@@ -100,9 +100,15 @@ def main(argv: list[str] | None = None) -> None:
                    help="with --clean hella: replace the deployed (never-firing) SCRUNCH "
                         "stage by these, in order, e.g. --scrunch 1,1,5 --scrunch 16,1,4; "
                         "hella semantics (box-average, cut at SIGMA/sqrt(T*F), grow, replace)")
+    p.add_argument("--sumthreshold", metavar="KEY=VAL,...", default=None,
+                   help="with --clean hella: add a SumThreshold stage against a channel-"
+                        "neighbour reference after the scrunch stages; 'default' or e.g. "
+                        "chi1=8,rho=1.5,mmin=16,mmax=512,nb=4,grow_t=0 (single_pulse.sumthreshold_flag)")
     args = p.parse_args(argv)
     clean = None if args.clean == "none" else args.clean
     scrunches = [single_pulse.parse_scrunch(x) for x in args.scrunch] if args.scrunch else None
+    sumthreshold = (single_pulse.parse_sumthreshold(args.sumthreshold)
+                    if args.sumthreshold is not None else None)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
@@ -116,7 +122,7 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(f"{fil} does not exist")
         png, _ = dump_plotter.render_card_from_fil(card, fil, out_png, layout=args.layout,
                                                    subbands=args.subbands, clean=clean,
-                                                   scrunches=scrunches)
+                                                   scrunches=scrunches, sumthreshold=sumthreshold)
         print(png)
         return
 
@@ -124,7 +130,7 @@ def main(argv: list[str] | None = None) -> None:
     if files:
         png, _ = dump_plotter.render_card(card, files, out_png, layout=args.layout,
                                           subbands=args.subbands, clean=clean,
-                                                   scrunches=scrunches)
+                                                   scrunches=scrunches, sumthreshold=sumthreshold)
         print(png)
         return
 
@@ -139,7 +145,7 @@ def main(argv: list[str] | None = None) -> None:
     logging.getLogger("t3.replot").info("no dump on this node; rendering from %s", fil)
     png, _ = dump_plotter.render_card_from_fil(card, fil, out_png, layout=args.layout,
                                                subbands=args.subbands, clean=clean,
-                                                   scrunches=scrunches)
+                                                   scrunches=scrunches, sumthreshold=sumthreshold)
     print(png)
 
 

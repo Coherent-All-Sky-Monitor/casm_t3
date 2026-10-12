@@ -111,6 +111,35 @@ inj_20261012_0012 (2026-10-12, docs/operations.md): the single-channel
 stage, and SIGMA 8 (a 2 sigma cut on the 17 ms mean) keeps every synthetic
 pulse detectable, whereas SIGMA 4 removes pulses above S/N ~250.
 
+`single_pulse.sumthreshold_flag` (`sumthreshold=`, CLI `--sumthreshold
+default` or `KEY=VAL,...`) is a stage hella does not have, for offline
+comparison: SumThreshold (Offringa et al. 2010) along time against a
+channel-neighbour reference. For each window M = mmin, 2 mmin, ... mmax
+(defaults 16 to 512 samples) the standardised gulp is box-averaged over M
+samples, the reference is the median over the nb (default 4) channels on
+either side of that averaged data, and a window whose |self - reference|
+exceeds chi1 / rho**log2(M) (defaults 8 and 1.5, so 1.58 sigma on the
+16-sample mean down to 0.21 sigma on the 512-sample mean) is flagged over
+its M samples and replaced by the channel mean before the next M. Broadband
+emission is in the reference as much as in the channel and leaves no
+residual whatever its brightness; a dispersed pulse stays inside its
+neighbours' windows as long as the sweep across nb channels is shorter than
+M, which is why M starts at 16 rather than 1 (at DM 300 the sweep across
++-4 channels is +-3 samples). Masked channels are excluded from the
+reference and never flagged. On pure noise the stage flags about 0.1 % of
+samples. It runs after the scrunch stages, in numpy and scipy, about 35 s
+per gulp.
+
+After any flagging (scrunch or SumThreshold) the final per-channel moments
+are taken over the unflagged samples only, flagged samples are returned to
+exactly 0 after the baseline and global steps, and a channel more than half
+flagged is blanked. hella re-measures over every sample after its
+replacement; the difference matters only when a lot is flagged. The figure's
+own per-channel median/MAD normalisation runs on the cleaned array, and a
+channel with a long near-constant replaced run would otherwise be inflated
+by it (channel 2728 of inj_20261012_0012 went to a std of 653 and the pulse
+S/N from 24 to 9 before this was handled).
+
 Injection replay cards (`t3-replay-injection`) carry t2d's injection gulp
 block when one exists, with the injection cluster set to "triggered" in the
 replay's copy, so the injection is the red group and the sky title reads

@@ -889,7 +889,7 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
                           t_rel_event_s: float, card: dict, ffactor: int | None = None,
                           registry: weights_registry.Registry | None = None,
                           subbands: int | None = None, clean: str | None = None,
-                          scrunches=None) -> dict:
+                          scrunches=None, sumthreshold: dict | None = None) -> dict:
     """Draw the v3 candidate figure into ``fig`` (from new_canvas()).
 
     data : (nchan, ntime) float32, raw (dispersed) cutout for the detection beam.
@@ -902,6 +902,7 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
         hella's gulps through the card's ``samp``), so the panels show roughly
         what the search saw. ``scrunches`` overrides the SCRUNCH stages of
         that cleaning (single_pulse.hella_clean); None is the deployed set.
+        ``sumthreshold`` adds its SumThreshold stage (a dict of parameters).
 
     Returns {"axes": {role: Axes}}. Raises CornerTextError when a corner
     annotation would reach the t = 0 line.
@@ -918,6 +919,8 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
         samp = card.get("samp")
         sample0 = None if not samp else int(samp) - int(round(t_rel / tsamp))
         kw = {} if scrunches is None else {"scrunches": tuple(scrunches)}
+        if sumthreshold:
+            kw["sumthreshold"] = dict(sumthreshold)
         data = single_pulse.hella_clean(data, tsamp, sample0=sample0, **kw)
 
     norm = single_pulse.normalise(data)
@@ -1030,6 +1033,9 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
         if scrunches:
             clean_tag += " + scrunch " + " ".join(
                 f"({int(t)},{int(f)},{th:g})" for t, f, th in (st[:3] for st in scrunches))
+        if sumthreshold:
+            clean_tag += " + sumthreshold(" + ",".join(
+                f"{k}={v:g}" for k, v in sumthreshold.items()) + ")"
     set_wrapped_title(ax_dm0, "DM = 0 band-mean timeseries" + clean_tag)
     right_lines = [f"peak S/N at DM 0 near event: {peak_dm0:.1f}"]
     if pmax_dm0 > top_ylim[1]:
@@ -1178,7 +1184,7 @@ def make_candidate_figure_v3(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
                              ffactor: int | None = None,
                              registry: weights_registry.Registry | None = None,
                              subbands: int | None = None, clean: str | None = None,
-                             scrunches=None) -> Path:
+                             scrunches=None, sumthreshold: dict | None = None) -> Path:
     """Render the v3 candidate figure to ``out_png`` (1510 x 1517 px).
 
     See draw_candidate_figure for the arguments. The figure is closed whether
@@ -1190,7 +1196,7 @@ def make_candidate_figure_v3(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
         try:
             draw_candidate_figure(fig, data, freqs_mhz, tsamp_s, t_rel_event_s, card,
                                   ffactor=ffactor, registry=registry, subbands=subbands,
-                                  clean=clean, scrunches=scrunches)
+                                  clean=clean, scrunches=scrunches, sumthreshold=sumthreshold)
             out_png.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(out_png, dpi=FIG_DPI)      # fixed canvas: same pixel size every time
         finally:
@@ -1377,7 +1383,7 @@ def make_candidate_figure_legacy(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_
 def make_candidate_figure(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png,
                           ffactor: int | None = None, registry=None, layout: str | None = None,
                           subbands: int | None = None, clean: str | None = None,
-                          scrunches=None) -> Path:
+                          scrunches=None, sumthreshold: dict | None = None) -> Path:
     """Dispatch on layout: "v2" (the default) draws the v3 figure, "legacy" the
     pre-2026-09-03 one.
 
@@ -1392,7 +1398,8 @@ def make_candidate_figure(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png
     if layout == "v2":
         return make_candidate_figure_v3(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png,
                                         ffactor=ffactor, registry=registry, subbands=subbands,
-                                        clean=clean, scrunches=scrunches)
+                                        clean=clean, scrunches=scrunches,
+                                        sumthreshold=sumthreshold)
     if clean:
         raise ValueError(f"clean={clean!r} is only available with the v2 layout")
     return make_candidate_figure_legacy(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png,

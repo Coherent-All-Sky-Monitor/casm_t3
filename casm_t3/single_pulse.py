@@ -123,6 +123,8 @@ HELLA_CLIP_SIGMA = 10.0              # U8_CLIP: symmetric rail before the uint8 
 #: deployed single stage has a 1e6 sigma threshold and never flags anything;
 #: it exists only so the static mask kernel runs (casm-wiki hella-static-mask.md).
 HELLA_SCRUNCHES = ((1, 1, 1.0e6),)
+#: SumThreshold with a channel-neighbour reference (not in hella; offline trial).
+SUMTHRESHOLD_DEFAULTS = {"chi1": 8.0, "rho": 1.5, "mmin": 16, "mmax": 512, "nb": 4, "grow_t": 0}
 
 
 def running_median_clamped(x: np.ndarray, w: int) -> np.ndarray:
@@ -143,13 +145,32 @@ def running_median_clamped(x: np.ndarray, w: int) -> np.ndarray:
     return out
 
 
-def _standardise(d: np.ndarray) -> np.ndarray:
+def _standardise(d: np.ndarray, flagged: np.ndarray | None = None) -> np.ndarray:
     """hella bandpass_correct: (x - mean) / std per channel over the gulp (plain
-    moments, not median/MAD); a channel with zero or non-finite variance is 0."""
-    mean = d.mean(axis=1, keepdims=True)
-    std = d.std(axis=1, keepdims=True)
+    moments, not median/MAD); a channel with zero or non-finite variance is 0.
+
+    With ``flagged`` the moments come from the unflagged samples only and the
+    flagged ones are set to 0, the channel mean. hella itself re-measures over
+    every sample after a replacement, so a channel whose burst was replaced
+    keeps a bias of (burst fraction x burst height) in its clean samples and a
+    partly flagged burst is amplified by the shrunken std; the masked moments
+    avoid both. The deployed (never-firing) configuration is unaffected.
+    """
+    if flagged is None or not flagged.any():
+        mean = d.mean(axis=1, keepdims=True)
+        std = d.std(axis=1, keepdims=True)
+    else:
+        n = (~flagged).sum(axis=1, keepdims=True).astype(float)
+        good = np.where(flagged, 0.0, d)
+        mean = good.sum(axis=1, keepdims=True) / np.maximum(n, 1)
+        var = (np.where(flagged, 0.0, (d - mean) ** 2)).sum(axis=1, keepdims=True) / np.maximum(n, 1)
+        std = np.sqrt(var)
+        std[n[:, 0] < 2] = 0.0
     ok = np.isfinite(std) & (std > 0) & np.isfinite(mean)
-    return np.where(ok, (d - mean) / np.where(ok, std, 1.0), 0.0)
+    out = np.where(ok, (d - mean) / np.where(ok, std, 1.0), 0.0)
+    if flagged is not None:
+        out[flagged] = 0.0
+    return out
 
 
 def _scrunch_flag(d: np.ndarray, tscrunch: int, fscrunch: int, thresh: float) -> np.ndarray:
@@ -168,9 +189,90 @@ def _scrunch_flag(d: np.ndarray, tscrunch: int, fscrunch: int, thresh: float) ->
     return mask
 
 
+def sumthreshold_flag(d: np.ndarray, chi1: float = 8.0, rho: float = 1.5, mmin: int = 16,
+                      mmax: int = 512, nb: int = 4, grow_t: int = 0,
+                      mask: tuple[int, int] | None = None) -> np.ndarray:
+    """SumThreshold (Offringa et al. 2010) along time, against a channel-neighbour reference.
+
+    ``d`` is a standardised (nchan, ntime) gulp, modified in place: flagged
+    samples are set to the channel mean, 0. For each window length M in
+    mmin, 2 mmin, ... mmax the data are box-averaged over M samples; the reference
+    is the median over the ``nb`` channels on either side (self excluded by
+    the odd-window median's symmetry) of that averaged data, recomputed at
+    every M; a window whose |self - reference| exceeds chi1 / rho**log2(M) is
+    flagged over its M samples. Flagged samples are replaced before the next
+    M, Offringa's substitution, so a flagged burst does not re-trigger at
+    larger M. Broadband emission is in the reference as much as in the
+    channel and leaves no residual, whichever its brightness; that is the
+    point of the reference. A dispersed pulse stays inside its neighbours'
+    windows as long as the sweep across nb channels is shorter than M
+    samples, which is why the reference is rebuilt from the M-averaged data
+    and why M starts at ``mmin`` (16 samples covers +-4 channels up to DM
+    ~1000 over most of the band; the bursts this targets are >= 100 samples).
+    The thresholds keep Offringa's ladder from M = 1, so chi1 is still the
+    per-sample value: at mmin = 16 the cut on the 16-sample mean is
+    chi1 / rho**4.
+    ``grow_t`` dilates the final mask by that many samples in time. Channels
+    in ``mask`` (the static mask range) are excluded from the reference and
+    never flagged. Returns the boolean mask.
+    """
+    from scipy.ndimage import maximum_filter1d, median_filter, uniform_filter1d
+
+    nchan, ntime = d.shape
+    flagged = np.zeros(d.shape, dtype=bool)
+    live = np.ones(nchan, dtype=bool)
+    if mask is not None:
+        live[mask[0]:mask[1]] = False
+    work = d[live]
+    m = max(1, int(mmin))
+    while m <= mmax:
+        thresh = chi1 / rho ** np.log2(m)
+        # reflect at the time edges: "nearest" would pad a window at the gulp
+        # edge with copies of one sample and trip the threshold there
+        avg = work if m == 1 else uniform_filter1d(work, m, axis=1, mode="reflect")
+        ref = median_filter(avg, size=(2 * nb + 1, 1), mode="nearest")
+        hit = np.abs(avg - ref) > thresh
+        if m > 1:
+            # a hit at window centre t flags the whole window (running max is
+            # O(N); a binary_dilation with a 512-wide structure is O(N M))
+            hit = maximum_filter1d(hit.astype(np.uint8), m, axis=1, mode="constant") > 0
+        new = hit & ~flagged[live]
+        if new.any():
+            work[new] = 0.0
+            sub = flagged[live]
+            sub |= hit
+            flagged[live] = sub
+        m *= 2
+    if grow_t > 0:
+        sub = maximum_filter1d(flagged[live].astype(np.uint8), 2 * grow_t + 1, axis=1,
+                               mode="constant") > 0
+        work[sub & ~flagged[live]] = 0.0
+        flagged[live] = sub
+    d[live] = work
+    return flagged
+
+
+def parse_sumthreshold(text: str) -> dict:
+    """'chi1=6,rho=1.5,mmax=256,nb=4,grow_t=0' (any subset; 'default' = all defaults)."""
+    cfg = dict(SUMTHRESHOLD_DEFAULTS)
+    if text and text.strip().lower() not in ("default", "on", "yes", "1"):
+        for part in text.replace(";", ",").split(","):
+            if not part.strip():
+                continue
+            k, _, v = part.partition("=")
+            k = k.strip()
+            if k not in cfg:
+                raise ValueError(f"unknown sumthreshold key {k!r}; keys: {sorted(cfg)}")
+            cfg[k] = type(cfg[k])(float(v)) if k != "rho" else float(v)
+    if cfg["mmax"] < cfg["mmin"] or cfg["mmin"] < 1 or cfg["nb"] < 1 or cfg["chi1"] <= 0 or cfg["rho"] <= 0:
+        raise ValueError(f"bad sumthreshold parameters: {cfg}")
+    return cfg
+
+
 def _hella_clean_gulp(d: np.ndarray, tsamp_s: float, mask: tuple[int, int],
                       baseline_s: float, clip_sigma: float,
-                      scrunches=HELLA_SCRUNCHES, stats: dict | None = None) -> np.ndarray:
+                      scrunches=HELLA_SCRUNCHES, stats: dict | None = None,
+                      sumthreshold: dict | None = None) -> np.ndarray:
     """One gulp through hella's flagging stage; ``d`` is (nchan, ntime) float64."""
     nchan, ntime = d.shape
     # 1. standardise every channel on its own gulp mean and std
@@ -182,11 +284,14 @@ def _hella_clean_gulp(d: np.ndarray, tsamp_s: float, mask: tuple[int, int],
     for stage in scrunches:
         d = _standardise(d)
         flagged |= _scrunch_flag(d, *stage[:3])
+    if sumthreshold:
+        d = _standardise(d)
+        flagged |= sumthreshold_flag(d, mask=mask, **sumthreshold)
     flagged[mask[0]:mask[1], :] = False          # the mask is not "flagging"
     if stats is not None:
         stats["flagged_frac"] = float(flagged[mask[1]:].mean()) if mask[1] < nchan else 0.0
     d[mask[0]:mask[1], :] = 0.0
-    d = _standardise(d)                          # the final apply_scrunch(flag=0, ts=1)
+    d = _standardise(d, flagged)                 # the final apply_scrunch(flag=0, ts=1)
     # 3. common-mode baseline: band mean over ALL channels, masked zeros included
     #    (measure_ts divides by NCHAN), running median over baseline_s, then the
     #    per-channel least-squares fit to it subtracted (subtract_channel_fit, mode 1).
@@ -219,6 +324,17 @@ def _hella_clean_gulp(d: np.ndarray, tsamp_s: float, mask: tuple[int, int],
     if gstd > 0:
         d = (d - d.mean()) / gstd
     d[mask[0]:mask[1], :] = 0.0          # hella leaves them at -mean/std, ~1e-4; 0 reads better
+    # Flagged samples carry no data: back to exactly 0 after the baseline and
+    # global steps moved them, and a channel more than half flagged is blanked.
+    # Otherwise a downstream per-channel median/MAD (single_pulse.normalise)
+    # sees a near-constant run, measures almost no scatter and inflates the
+    # channel a hundredfold (seen on inj_20261012_0012, 2026-10-12).
+    if flagged.any():
+        d[flagged] = 0.0
+        heavy = flagged.mean(axis=1) > 0.5
+        d[heavy, :] = 0.0
+        if stats is not None:
+            stats["blanked_chans"] = int(heavy.sum())
     return np.clip(d, -clip_sigma, clip_sigma)
 
 
@@ -227,7 +343,8 @@ def hella_clean(data: np.ndarray, tsamp_s: float, sample0: int | None = None,
                 mask: tuple[int, int] = HELLA_MASK_CHANNELS,
                 baseline_s: float = HELLA_BASELINE_S,
                 clip_sigma: float = HELLA_CLIP_SIGMA,
-                scrunches=HELLA_SCRUNCHES) -> np.ndarray:
+                scrunches=HELLA_SCRUNCHES,
+                sumthreshold: dict | None = None) -> np.ndarray:
     """Approximate what hella searches: the deployed flagging stage applied offline.
 
     ``data`` is (nchan, ntime) in hella channel order (channel 0 = 484.375 MHz).
@@ -245,6 +362,11 @@ def hella_clean(data: np.ndarray, tsamp_s: float, sample0: int | None = None,
     with the channel mean. The default is the deployed single never-firing
     stage; e.g. ((1, 1, 5.0),) is a per-pixel 5 sigma cut, and the log reports
     the flagged fraction of the unmasked band per piece.
+
+    ``sumthreshold`` (a dict of sumthreshold_flag keyword arguments, see
+    SUMTHRESHOLD_DEFAULTS) adds, after the scrunch stages, a SumThreshold
+    stage against a channel-neighbour reference. hella has no such stage; it
+    is here for offline comparison.
 
     Not reproduced: the uint8 quantisation (0.08 sigma steps) and the per-DM-row
     clipped renormalisation after dedispersion, neither visible by eye.
@@ -264,16 +386,20 @@ def hella_clean(data: np.ndarray, tsamp_s: float, sample0: int | None = None,
              len(edges) - 1, gulp, edges[1:-1], "unknown" if sample0 is None else sample0,
              mask[0], mask[1] - 1, baseline_s, clip_sigma,
              [tuple(st[:3]) for st in scrunches])
+    if sumthreshold:
+        log.info("hella_clean: sumthreshold %s", sumthreshold)
     out = np.empty((nchan, ntime), dtype=np.float32)
-    fracs = []
+    fracs, blanked = [], []
     for lo, hi in zip(edges, edges[1:]):
         stats = {}
         out[:, lo:hi] = _hella_clean_gulp(data[:, lo:hi].astype(np.float64), tsamp_s,
-                                          mask, baseline_s, clip_sigma, scrunches, stats)
+                                          mask, baseline_s, clip_sigma, scrunches, stats,
+                                          sumthreshold)
         fracs.append(stats.get("flagged_frac", 0.0))
+        blanked.append(stats.get("blanked_chans", 0))
     if any(f > 0 for f in fracs):
-        log.info("hella_clean: flagged fraction of the unmasked band per piece: %s",
-                 ["%.2e" % f for f in fracs])
+        log.info("hella_clean: flagged fraction of the unmasked band per piece: %s; "
+                 "channels blanked (>50%% flagged): %s", ["%.2e" % f for f in fracs], blanked)
     return out
 
 
