@@ -29,7 +29,7 @@ import logging
 import sys
 from pathlib import Path
 
-from casm_t3 import plotting
+from casm_t3 import single_pulse, plotting
 from casm_t3.apps import dump_plotter
 
 # Dump .dada files land within seconds of the card being written, and
@@ -96,8 +96,13 @@ def main(argv: list[str] | None = None) -> None:
                    help="'hella': pass the cutout through the deployed hella flagging stage "
                         "(single_pulse.hella_clean) before plotting, to see roughly what "
                         "the search saw (default: as recorded)")
+    p.add_argument("--scrunch", action="append", default=None, metavar="T,F,SIGMA",
+                   help="with --clean hella: replace the deployed (never-firing) SCRUNCH "
+                        "stage by these, in order, e.g. --scrunch 1,1,5 --scrunch 16,1,4; "
+                        "hella semantics (box-average, cut at SIGMA/sqrt(T*F), grow, replace)")
     args = p.parse_args(argv)
     clean = None if args.clean == "none" else args.clean
+    scrunches = [single_pulse.parse_scrunch(x) for x in args.scrunch] if args.scrunch else None
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
@@ -110,14 +115,16 @@ def main(argv: list[str] | None = None) -> None:
         if not fil.is_file():
             sys.exit(f"{fil} does not exist")
         png, _ = dump_plotter.render_card_from_fil(card, fil, out_png, layout=args.layout,
-                                                   subbands=args.subbands, clean=clean)
+                                                   subbands=args.subbands, clean=clean,
+                                                   scrunches=scrunches)
         print(png)
         return
 
     files = card_dump_files(card, card_path, args.dump_dir)
     if files:
         png, _ = dump_plotter.render_card(card, files, out_png, layout=args.layout,
-                                          subbands=args.subbands, clean=clean)
+                                          subbands=args.subbands, clean=clean,
+                                                   scrunches=scrunches)
         print(png)
         return
 
@@ -131,7 +138,8 @@ def main(argv: list[str] | None = None) -> None:
                  f"mtime (wrong node, or dump cleaned up) and {fallback}")
     logging.getLogger("t3.replot").info("no dump on this node; rendering from %s", fil)
     png, _ = dump_plotter.render_card_from_fil(card, fil, out_png, layout=args.layout,
-                                               subbands=args.subbands, clean=clean)
+                                               subbands=args.subbands, clean=clean,
+                                                   scrunches=scrunches)
     print(png)
 
 

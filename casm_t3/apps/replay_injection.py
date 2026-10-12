@@ -399,6 +399,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--gulp-dir", default=DEFAULT_GULP_DIR,
                    help="t2d's injection gulp blocks, for the v3 bottom row; "
                         "'' to draw the legacy bottom row")
+    p.add_argument("--scrunch", action="append", default=None, metavar="T,F,SIGMA",
+                   help="with --clean hella: replace the deployed (never-firing) SCRUNCH "
+                        "stage by these, in order, e.g. --scrunch 1,1,5 --scrunch 16,1,4; "
+                        "hella semantics (box-average, cut at SIGMA/sqrt(T*F), grow, replace)")
     args = p.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -514,14 +518,17 @@ def main(argv: list[str] | None = None) -> None:
     suffix = "" if trunc_mhz is None else f" (replay truncated below {trunc_mhz:.0f} MHz)"
     plot_card = dict(card, candname=f"INJECTION: {label}{suffix}", source="blind")
     clean = None if args.clean == "none" else args.clean
+    scrunches = [single_pulse.parse_scrunch(x) for x in args.scrunch] if args.scrunch else None
     png = plotting.make_candidate_figure(beam2d, header.freqs_mhz, header.tsamp_s,
                                          t_rel, plot_card, Path(args.out), layout=args.layout,
-                                         subbands=args.subbands, clean=clean)
+                                         subbands=args.subbands, clean=clean,
+                                         scrunches=scrunches)
 
     measured = measure_snr(beam2d, header.freqs_mhz, header.tsamp_s, plot_dm, width, t_rel)
     card["replay"] = {"dump_files": [str(f) for f in files], "n_samples": int(ntime),
                       "pulse_added": not args.no_pulse, "pulse_sample": c0,
                       "clean": clean,
+                      "scrunches": None if not scrunches else [list(st) for st in scrunches],
                       "truncated_below_mhz": (None if trunc_mhz is None
                                               else round(trunc_mhz, 2)),
                       "measured_boxcar_snr": round(measured, 2), "plot": str(png)}

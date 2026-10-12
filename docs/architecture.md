@@ -100,6 +100,17 @@ on cleaned data it is close to the identity.
 DM = 0 panel title then ends in ", hella-cleaned" and the result record
 carries `clean`. The default is the data as recorded.
 
+The SCRUNCH stages are configurable (`scrunches=`, CLI `--scrunch T,F,SIGMA`,
+repeatable, in config order) with hella's semantics: each stage
+re-standardises, box-averages over T samples x F channels, masks
+|value| > SIGMA / sqrt(T F), grows the mask by the same box and replaces with
+the channel mean. The default is the deployed never-firing stage. The
+DM = 0 title and the result record name the stages used. Measured on
+inj_20261012_0012 (2026-10-12, docs/operations.md): the single-channel
+0.1-1 s bursts that survive the deployed chain are removed by a (16,1)
+stage, and SIGMA 8 (a 2 sigma cut on the 17 ms mean) keeps every synthetic
+pulse detectable, whereas SIGMA 4 removes pulses above S/N ~250.
+
 Injection replay cards (`t3-replay-injection`) carry t2d's injection gulp
 block when one exists, with the injection cluster set to "triggered" in the
 replay's copy, so the injection is the red group and the sky title reads

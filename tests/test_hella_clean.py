@@ -108,3 +108,35 @@ def test_clean_rejects_unknown_and_legacy(tmp_path):
     with pytest.raises(ValueError):
         plotting.make_candidate_figure(data, freqs, tsamp, 0.2, card, tmp_path / "x.png",
                                        clean="bogus")
+
+
+def test_scrunch_stage_removes_a_single_channel_burst_and_keeps_a_dim_pulse():
+    """(16,1,8) cuts the 16-sample mean at 2 sigma: a 0.3 s single-channel burst
+    at 3 sigma per sample goes, a dim dispersed pulse (0.1 sigma per pixel) stays."""
+    data = _cutout(ntime=9000)
+    nchan, ntime = data.shape
+    data[1500, 4000:4300] += 3.0 * data[1500].std()
+    freqs = 484.375 - np.arange(nchan) * 0.030517578125
+    delays = np.round(4.148808e3 * 200 * (freqs ** -2 - freqs.max() ** -2) / TSAMP).astype(int)
+    for c in range(nchan):
+        data[c, 2000 + delays[c]: 2032 + delays[c]] += 0.1 * data[c].std()
+    plain = single_pulse.hella_clean(data, TSAMP, sample0=0)
+    flagged = single_pulse.hella_clean(data, TSAMP, sample0=0,
+                                       scrunches=((1, 1, 5.0), (16, 1, 8.0), (1, 16, 8.0)))
+    # the burst channel is quiet after flagging and loud before
+    assert np.abs(plain[1500, 4000:4300]).mean() > 1.5
+    assert np.abs(flagged[1500, 4000:4300]).mean() < 0.3
+    # the pulse's band-mean boxcar S/N survives within a few percent
+    def snr(arr):
+        dd = single_pulse.dedisperse(arr, 200.0, freqs, TSAMP).mean(axis=0)
+        return single_pulse.profile_snr(dd, 32)[1990:2050].max()
+    assert snr(flagged) > 0.9 * snr(plain) > 5.0
+
+
+def test_parse_scrunch():
+    assert single_pulse.parse_scrunch("16,1,8") == (16, 1, 8.0)
+    assert single_pulse.parse_scrunch("1 1 1000000 1") == (1, 1, 1e6)
+    with pytest.raises(ValueError):
+        single_pulse.parse_scrunch("16,1")
+    with pytest.raises(ValueError):
+        single_pulse.parse_scrunch("0,1,5")

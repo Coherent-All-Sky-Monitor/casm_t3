@@ -41,6 +41,19 @@ that dominates the recorded waterfall is down-weighted away, the masked
 block is blank, the replayed peak S/N moved from 23.7 to 25.4 against
 hella's 23.8.
 
+`--scrunch T,F,SIGMA` (repeatable) replaces the deployed never-firing SCRUNCH
+stage by real ones, hella semantics. Offline trial on inj_20261012_0012,
+2026-10-12 (scratch scripts `bright_pulse.py`, `width_test.py`, `full_tf.py`;
+figures in `/mnt/nvme5/casm_pipeline/scratchpad/hella_clean_20261012/`):
+the RFI left by the deployed chain is one channel wide, 0.1-1 s long, 2-5
+sigma per sample, at 401-437 MHz. `(1,1,5)` alone barely touches it.
+`(1,1,5) (16,1,4) (1,16,4)` removes it but makes pulses brighter than
+S/N ~250 undetectable (S/N 258 -> 14, 775 -> 6). `(1,1,5) (16,1,8) (1,16,8)`
+removes 8 of the 9 hot channels, flags 0.03% of the band, and every pulse
+from 1 to 60 ms FWHM and 6 to 250 counts stays above S/N 30 (bright ones are
+reduced, e.g. 648 -> 33 at 26.6 ms, 100 counts). The `(1,16,8)` stage adds
+nothing on this RFI; `(16,1,8)` does the work. Nothing of this is live.
+
 Never re-queue cards to test plotting: the live plotter may delete the
 dump after rendering, and a re-queued card can fire side effects.
 
