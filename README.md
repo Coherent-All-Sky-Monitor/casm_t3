@@ -121,6 +121,8 @@ It reads the injection's row from the T2 ledger (read-only) and its matched
 cluster, pulls the detection beam out of the dump you point it at, adds the
 same synthetic pulse the injection bot generated, and renders the ordinary
 v2 figure. `--no-pulse` renders the dump untouched for comparison,
+`--clean hella` passes the beam (pulse included) through the deployed hella
+flagging stage first (`single_pulse.hella_clean`; also on `t3-replot`),
 `--card-json` writes the synthetic card, `--fil` writes the beam plus pulse
 as a float32 single-beam filterbank. When there is no matched cluster (or
 you are replaying into a dump from a different observation), give

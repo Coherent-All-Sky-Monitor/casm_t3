@@ -373,6 +373,10 @@ def main(argv: list[str] | None = None) -> None:
                         "panels (default: from the S/N, plotting.subbands_for)")
     p.add_argument("--no-pulse", action="store_true",
                    help="render the dump untouched, for comparison")
+    p.add_argument("--clean", choices=["none", "hella"], default="none",
+                   help="'hella': pass the beam (pulse included) through the deployed hella "
+                        "flagging stage before plotting, to see roughly what the search "
+                        "saw (default: as recorded)")
     p.add_argument("--card-json", help="also write the synthetic card here")
     p.add_argument("--fil", help="also write the beam (+pulse) as a float32 single-beam .fil")
     p.add_argument("--db", default=DEFAULT_DB, help="T2 sqlite (opened read-only)")
@@ -509,13 +513,15 @@ def main(argv: list[str] | None = None) -> None:
     label = args.label or inj.get("file_id") or str(int(inj["id"]))
     suffix = "" if trunc_mhz is None else f" (replay truncated below {trunc_mhz:.0f} MHz)"
     plot_card = dict(card, candname=f"INJECTION: {label}{suffix}", source="blind")
+    clean = None if args.clean == "none" else args.clean
     png = plotting.make_candidate_figure(beam2d, header.freqs_mhz, header.tsamp_s,
                                          t_rel, plot_card, Path(args.out), layout=args.layout,
-                                         subbands=args.subbands)
+                                         subbands=args.subbands, clean=clean)
 
     measured = measure_snr(beam2d, header.freqs_mhz, header.tsamp_s, plot_dm, width, t_rel)
     card["replay"] = {"dump_files": [str(f) for f in files], "n_samples": int(ntime),
                       "pulse_added": not args.no_pulse, "pulse_sample": c0,
+                      "clean": clean,
                       "truncated_below_mhz": (None if trunc_mhz is None
                                               else round(trunc_mhz, 2)),
                       "measured_boxcar_snr": round(measured, 2), "plot": str(png)}

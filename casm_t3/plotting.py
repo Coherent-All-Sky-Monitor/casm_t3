@@ -66,6 +66,9 @@ SHOW_SOURCES = True    # sun, Cas A, Cyg A, Tau A markers + legend on the sky pa
 # approved on 2026-09-22. "legacy" is the pre-2026-09-03 figure.
 DEFAULT_LAYOUT = "v2"
 LAYOUTS = ("v2", "legacy")
+#: pre-processing before the per-channel normalisation: None as recorded,
+#: "hella" through single_pulse.hella_clean (v3 layout only)
+CLEANERS = (None, "hella")
 # DM colour scale for the member panels: plasma with the bright top cut off,
 # unreadable otherwise on a white panel.
 BEAM_DM_CMAP = mcolors.ListedColormap(
@@ -413,6 +416,7 @@ CORNER_PT_SMALL = 8.5            # only if a single word will not fit at 9 pt
 # corner text: a white backing keeps the text readable over the trace.
 CORNER_BBOX = dict(facecolor="white", alpha=0.8, edgecolor="none", pad=1.5)
 TOP_Y_EVENT_MULT = 3.0           # an unrelated spike gets at most 3 x the event's peak
+TOP_Y_FLOOR = -4.0               # row 1 y axes start here, so the noise is visible (2026-10-12)
 
 # --- row 3 ------------------------------------------------------------------
 TRIGGER_COLOR = "#c0392b"
@@ -884,7 +888,7 @@ def new_canvas():
 def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: float,
                           t_rel_event_s: float, card: dict, ffactor: int | None = None,
                           registry: weights_registry.Registry | None = None,
-                          subbands: int | None = None) -> dict:
+                          subbands: int | None = None, clean: str | None = None) -> dict:
     """Draw the v3 candidate figure into ``fig`` (from new_canvas()).
 
     data : (nchan, ntime) float32, raw (dispersed) cutout for the detection beam.
@@ -892,6 +896,10 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
         sample of ``data``.
     card : trigger card (candname/snr/dm/width/beam/samp/event_utc, the ``sky``
         block written by t2d, and the ``gulp`` block or the ``context`` members).
+    clean : None draws the data as recorded; "hella" first passes it through
+        single_pulse.hella_clean (the deployed hella flagging stage, phased to
+        hella's gulps through the card's ``samp``), so the panels show roughly
+        what the search saw.
 
     Returns {"axes": {role: Axes}}. Raises CornerTextError when a corner
     annotation would reach the t = 0 line.
@@ -901,6 +909,13 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
     dm, width = float(card["dm"]), 2 ** int(card["width"])
     gulp = card.get("gulp") or None
     nsub, ffactor = _subband_plan(card, freqs_mhz.size, ffactor, subbands)
+
+    if clean not in CLEANERS:
+        raise ValueError(f"clean must be one of {CLEANERS}, not {clean!r}")
+    if clean == "hella":
+        samp = card.get("samp")
+        sample0 = None if not samp else int(samp) - int(round(t_rel / tsamp))
+        data = single_pulse.hella_clean(data, tsamp, sample0=sample0)
 
     norm = single_pulse.normalise(data)
     dedis = single_pulse.dedisperse(norm, dm, freqs_mhz, tsamp)
@@ -984,7 +999,7 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
     top_y = 1.1 * min(max(pmax_dd, pmax_dm0, 5.0), TOP_Y_EVENT_MULT * peak_dd)
     if not top_y > 0.0:             # non-detection card: local peak at or below 0
         top_y = 1.1 * max(pmax_dd, pmax_dm0, 5.0)
-    top_ylim = (0.0, top_y)
+    top_ylim = (TOP_Y_FLOOR, top_y)
 
     ax_prof.plot(t_nat[:n_ok], sn_dd, "k-", lw=0.7)
     ax_prof.axvline(0, color=TRIGGER_COLOR, alpha=0.8, lw=0.9)
@@ -1006,7 +1021,8 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
     ax_dm0.plot(t_nat, prof_dm0, "-", color="0.3", lw=0.7)
     ax_dm0.axvline(0, color=TRIGGER_COLOR, alpha=0.8, lw=0.9)
     ax_dm0.set_ylabel(f"boxcar S/N (w = {width})")
-    set_wrapped_title(ax_dm0, "DM = 0 band-mean timeseries")
+    set_wrapped_title(ax_dm0, "DM = 0 band-mean timeseries"
+                      + (", hella-cleaned" if clean == "hella" else ""))
     right_lines = [f"peak S/N at DM 0 near event: {peak_dm0:.1f}"]
     if pmax_dm0 > top_ylim[1]:
         right_lines.append(f"max in window: {fmt_snr(pmax_dm0)} (off scale)")
@@ -1153,7 +1169,7 @@ def make_candidate_figure_v3(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
                              t_rel_event_s: float, card: dict, out_png: str | Path,
                              ffactor: int | None = None,
                              registry: weights_registry.Registry | None = None,
-                             subbands: int | None = None) -> Path:
+                             subbands: int | None = None, clean: str | None = None) -> Path:
     """Render the v3 candidate figure to ``out_png`` (1510 x 1517 px).
 
     See draw_candidate_figure for the arguments. The figure is closed whether
@@ -1164,7 +1180,8 @@ def make_candidate_figure_v3(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
         fig = new_canvas()
         try:
             draw_candidate_figure(fig, data, freqs_mhz, tsamp_s, t_rel_event_s, card,
-                                  ffactor=ffactor, registry=registry, subbands=subbands)
+                                  ffactor=ffactor, registry=registry, subbands=subbands,
+                                  clean=clean)
             out_png.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(out_png, dpi=FIG_DPI)      # fixed canvas: same pixel size every time
         finally:
@@ -1350,18 +1367,23 @@ def make_candidate_figure_legacy(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_
 
 def make_candidate_figure(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png,
                           ffactor: int | None = None, registry=None, layout: str | None = None,
-                          subbands: int | None = None) -> Path:
+                          subbands: int | None = None, clean: str | None = None) -> Path:
     """Dispatch on layout: "v2" (the default) draws the v3 figure, "legacy" the
     pre-2026-09-03 one.
 
     ``subbands`` (or the lower-level ``ffactor``) forces the row count of the
     image panels; left unset, it follows the card S/N through subbands_for.
+    ``clean`` ("hella") pre-processes the cutout as the deployed search does;
+    the legacy layout does not support it.
     """
     layout = layout or DEFAULT_LAYOUT
     if layout not in LAYOUTS:
         raise ValueError(f"layout must be one of {LAYOUTS}, not {layout!r}")
     if layout == "v2":
         return make_candidate_figure_v3(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png,
-                                        ffactor=ffactor, registry=registry, subbands=subbands)
+                                        ffactor=ffactor, registry=registry, subbands=subbands,
+                                        clean=clean)
+    if clean:
+        raise ValueError(f"clean={clean!r} is only available with the v2 layout")
     return make_candidate_figure_legacy(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png,
                                         ffactor=ffactor, subbands=subbands)

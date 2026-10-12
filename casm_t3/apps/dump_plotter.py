@@ -80,7 +80,8 @@ def ship_artifacts(files: list[Path], candname: str, archive_host: str, archive_
 def render_card(card: dict, dump_files: list[Path], out_png: Path,
                 layout: str | None = None,
                 fil_path: Path | None = None,
-                subbands: int | None = None) -> tuple[Path, dict]:
+                subbands: int | None = None,
+                clean: str | None = None) -> tuple[Path, dict]:
     """Read the detection beam from dump_files and render the candidate figure.
 
     Pure transform — no dump triggers, no artifact shipping, no alerting —
@@ -109,7 +110,7 @@ def render_card(card: dict, dump_files: list[Path], out_png: Path,
 
     png = plotting.make_candidate_figure(
         data[0], header.freqs_mhz, header.tsamp_s, t_rel, card, out_png, layout=layout,
-        subbands=subbands)
+        subbands=subbands, clean=clean)
 
     result = dict(card)
     result.update(host=LOCAL_HOSTNAME, dump_files=[str(f) for f in dump_files],
@@ -121,7 +122,8 @@ def render_card(card: dict, dump_files: list[Path], out_png: Path,
 
 def render_card_from_fil(card: dict, fil_path: Path, out_png: Path,
                          layout: str | None = None,
-                         subbands: int | None = None) -> tuple[Path, dict]:
+                         subbands: int | None = None,
+                         clean: str | None = None) -> tuple[Path, dict]:
     """Render the figure from the archived single-beam .fil instead of a dump.
 
     The .dada is deleted minutes after a trigger and the per-event .fil is
@@ -136,10 +138,13 @@ def render_card_from_fil(card: dict, fil_path: Path, out_png: Path,
         logger.warning("event time %.2fs falls outside %s of %.2fs; timing offset?",
                        t_rel, Path(fil_path).name, span_s)
     png = plotting.make_candidate_figure(data, header.freqs_mhz, header.tsamp_s, t_rel,
-                                         card, out_png, layout=layout, subbands=subbands)
+                                         card, out_png, layout=layout, subbands=subbands,
+                                         clean=clean)
     result = dict(card)
     result.update(host=LOCAL_HOSTNAME, fil=str(fil_path), n_samples=int(data.shape[1]),
                   plot=str(png))
+    if clean:
+        result["clean"] = clean
     return png, result
 
 

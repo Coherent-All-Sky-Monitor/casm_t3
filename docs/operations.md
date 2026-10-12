@@ -32,6 +32,15 @@ explicitly. `--events-root ''` turns the fallback off. A card with no
 
     t3-replot /mnt/nvme3/T3/EVENTS/260922lruuie/260922lruuie.json --out /tmp/x.png
 
+`--clean hella` (also on `t3-replay-injection`) first passes the cutout
+through the deployed hella flagging stage (static 470-484 MHz mask,
+per-gulp channel standardisation, 0.2 s common-mode fit, +-10 sigma clip;
+architecture.md "Hella-like cleaning") so the panels show roughly what the
+search saw. First used on inj_20261012_0009 (2026-10-12): the 442 MHz line
+that dominates the recorded waterfall is down-weighted away, the masked
+block is blank, the replayed peak S/N moved from 23.7 to 25.4 against
+hella's 23.8.
+
 Never re-queue cards to test plotting: the live plotter may delete the
 dump after rendering, and a re-queued card can fire side effects.
 

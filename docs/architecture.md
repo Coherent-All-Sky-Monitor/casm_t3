@@ -35,7 +35,8 @@ by its robust noise. Left is the band mean dedispersed at the card DM, right
 the same array unshifted (DM 0). The noise is measured over the whole series,
 wrap tail included. The dedispersed trace stops where the dedispersion wrap
 begins. Both panels share the x window (about 1 s either side of the event),
-the ticks and one y range from 0: 1.1 x min(max(drawn maxima, 5), 3 x the
+the ticks and one y range from -4 (`TOP_Y_FLOOR`, so the noise is visible;
+since 2026-10-12, it was 0) to 1.1 x min(max(drawn maxima, 5), 3 x the
 event's local peak). A spike above that gets a corner line "max in window:
 N (off scale)". Corner text: "peak S/N near event" (maximum within two
 boxcars of t = 0) and "peak S/N at DM 0 near event". Every corner line ends
@@ -65,6 +66,39 @@ for member beams of the triggered cluster (ring on its peak beam), grey
 for member beams of any other cluster. A beam in both sets is red only. The
 two-line title counts exactly those markers. The sun, Cas A, Cyg A and
 Tau A markers keep their legend next to the S/N size key.
+
+## Hella-like cleaning (`clean="hella"`)
+
+`single_pulse.hella_clean` applies, offline, what the deployed hella fork
+(casm_hella_vishnu `casm_hella_refactored`, `src/hella/src/flagger.cu` and
+`timeseries.cu`, live `/tmp/hella_N.cfg`, read 2026-10-12) does to every
+gulp before dedispersion, so the figure shows roughly what the search saw:
+
+1. per channel, (x - mean) / std over the gulp (plain moments, not
+   median/MAD); a zero-variance channel is blanked;
+2. the static mask: channels 0-471 (484.375-470.0 MHz, the DTV block,
+   `FLAG1 0 / FLAG2 472`) set to 0;
+3. the common-mode baseline: band mean over all 3072 channels (masked zeros
+   included), running median over 0.2 s (191 samples, window clamped inside
+   the series), fitted to each channel by least squares and subtracted;
+4. one global scale for the gulp and a symmetric +-10 sigma clip.
+
+Every statistic is per 8192-sample gulp with no history, as in hella. The
+pieces are phased to hella's gulp boundaries (multiples of 8192 hella
+samples) through the card's `samp` and the event's offset into the cutout;
+a card without `samp` starts the pieces at the first sample and the log
+says so. The pieces at either end of a cutout are shorter than a gulp. Not
+reproduced: the uint8 quantisation and the per-DM-row clipped
+renormalisation after dedispersion. The deployed configuration has no
+time-frequency flagger (its one SCRUNCH line has a threshold of 1e6 sigma
+and exists only to make the static mask run), so there is none to
+reproduce. The per-channel median/MAD normalisation still runs afterwards;
+on cleaned data it is close to the identity.
+
+`make_candidate_figure(..., clean="hella")` (v2 layout only), `t3-replot
+--clean hella` and `t3-replay-injection --clean hella` switch it on; the
+DM = 0 panel title then ends in ", hella-cleaned" and the result record
+carries `clean`. The default is the data as recorded.
 
 Injection replay cards (`t3-replay-injection`) carry t2d's injection gulp
 block when one exists, with the injection cluster set to "triggered" in the

@@ -92,7 +92,12 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--subbands", type=int, default=None,
                    help="force the number of frequency rows in the waterfall and DM-time "
                         "panels (default: from the S/N, plotting.subbands_for)")
+    p.add_argument("--clean", choices=["none", "hella"], default="none",
+                   help="'hella': pass the cutout through the deployed hella flagging stage "
+                        "(single_pulse.hella_clean) before plotting, to see roughly what "
+                        "the search saw (default: as recorded)")
     args = p.parse_args(argv)
+    clean = None if args.clean == "none" else args.clean
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
@@ -105,14 +110,14 @@ def main(argv: list[str] | None = None) -> None:
         if not fil.is_file():
             sys.exit(f"{fil} does not exist")
         png, _ = dump_plotter.render_card_from_fil(card, fil, out_png, layout=args.layout,
-                                                   subbands=args.subbands)
+                                                   subbands=args.subbands, clean=clean)
         print(png)
         return
 
     files = card_dump_files(card, card_path, args.dump_dir)
     if files:
         png, _ = dump_plotter.render_card(card, files, out_png, layout=args.layout,
-                                          subbands=args.subbands)
+                                          subbands=args.subbands, clean=clean)
         print(png)
         return
 
@@ -126,7 +131,7 @@ def main(argv: list[str] | None = None) -> None:
                  f"mtime (wrong node, or dump cleaned up) and {fallback}")
     logging.getLogger("t3.replot").info("no dump on this node; rendering from %s", fil)
     png, _ = dump_plotter.render_card_from_fil(card, fil, out_png, layout=args.layout,
-                                               subbands=args.subbands)
+                                               subbands=args.subbands, clean=clean)
     print(png)
 
 
