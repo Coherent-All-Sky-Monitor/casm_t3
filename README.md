@@ -122,8 +122,8 @@ and docs/operations.md for the reasons, the deploy order and the delete rule.
 The `.fil` is a single-beam float32 SIGPROC filterbank of the detection
 beam only, roughly 55 MB. The other 63 beams go away with the `.dada`,
 which is deleted right after plotting, but only once the fil, both PNGs, the
-summary and the manifest are written; otherwise the dump stays and the log says
-what is missing. Writing the fil, the mask or the CSVs never blocks the
+summary, the manifest and, for a masked Slack figure, its mask.npz are written;
+otherwise the dump stays and the log says what is missing. Writing the fil, the mask or the CSVs never blocks the
 figure or the artifact shipping: a failure is logged and the event goes on.
 
 The plotter ships the two PNGs and the summary JSON to the archive tree, then

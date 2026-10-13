@@ -298,8 +298,10 @@ flat in `--plots-dir`, without the fil). Per card:
    half-shipped event.
 7. The dump is deleted only when `--delete-dumps` is set, the trigger is not a
    known source, and the fil (when the archive is on), both PNGs, the summary and
-   the manifest were all written. `mask.npz` and the CSVs are optional. Otherwise
-   the dump stays and the log names what is missing. A failed summary or
+   the manifest were all written, plus `mask.npz` when the Slack figure has hella's
+   flags applied (the figure cannot be redrawn without it). The CSVs are optional,
+   and so is `mask.npz` for a raw Slack figure. Otherwise the dump stays and the
+   log names what is missing. A failed summary or
    manifest write raises, so nothing ships and the card is renamed `.failed`.
 
 Reasons a figure has no hella flags (the label and `hella_mask.reason`):
@@ -329,7 +331,12 @@ SumThreshold settings, from the first record header used; null without a mask),
 `utc_stop` (from the data read), `sample0`, `nsamp` and `host`. `data_available`
 keeps its meaning (false once the dump is deleted). The `hella_mask` block is
 casm_io's, plus `reason` when the mask was computed but could not be stored
-(`mask.npz could not be written`).
+(`mask.npz could not be written`). Its `searched` is the fraction of window samples
+whose gulp record's `n_beams_searched` reached the detection beam, that is whether
+hella's search step that ran right after flagging that gulp covered the beam. It is
+not per-sample search coverage: hella searches a gulp's samples over several
+consecutive steps (its rewind buffer is longer than a gulp) and skips the first steps
+of an observation, so an event hella reported can sit in a gulp with `searched` 0.
 
 `t3-replay-injection` gives the replay the same pair. With `--mask-records` and
 records that cover the replay window for the injected global beam, `--out` is

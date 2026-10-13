@@ -69,6 +69,7 @@ MASK_CHUNK_RE = re.compile(r"^hmask_b(\d+)_g(\d+)(?:_p(\d+))?\.hmr(\.part)?$")
 MASK_ORPHAN_AGE_FACTOR = 2.0   # open chunk untouched this many age limits is orphaned
 GULP_SAMP = 8192          # samples per hella gulp
 GULP_LEAD_SAMP = 960      # hella gulp g carries samples g*8192-960 .. g*8192+7231
+PIN_NEIGHBOURS = 2        # chunks pinned each side of the card's chunk
 MASK_DIR_GRACE_S = 600.0  # an observation dir changed this recently is not removed
 TARGETS = ("dumps", "hella_masks")
 
@@ -345,11 +346,13 @@ def pinned_chunks(chunks: list[MaskChunk], cards: list[PendingCard]) -> set[str]
     """Paths of chunks that pending trigger cards could still need.
 
     Per card: the chunk of the card's observation that contains the card's
-    gulp, plus the chunk before and the chunk after it (a dump spans one to two
-    gulps and may cross a chunk boundary). A chunk covers its own first gulp up
-    to the first gulp of the next chunk of the same stream. A card with no gulp
-    number pins every chunk of its observation; a card with no known
-    observation, or an unreadable one, pins every chunk.
+    gulp, plus the two chunks before and the two after it. A chunk covers its
+    own first gulp up to the first gulp of the next chunk of the same stream.
+    The card carries hella's gulp counter while chunk names use the absolute
+    gulp (first sample // gulp length); they agree only when the ring's
+    OBS_OFFSET is 0 at attach, so the neighbours absorb an offset of up to two
+    chunks. A card with no gulp number pins every chunk of its observation; a
+    card with no known observation, or an unreadable one, pins every chunk.
     """
     pinned: set[str] = set()
     obs_names = sorted({c.obs for c in chunks})
@@ -368,7 +371,8 @@ def pinned_chunks(chunks: list[MaskChunk], cards: list[PendingCard]) -> set[str]
         for group in by_stream.values():
             group.sort(key=lambda c: (c.first_gulp, c.pid))
             hit = max((i for i, c in enumerate(group) if c.first_gulp <= gulp), default=0)
-            pinned.update(c.path for c in group[max(0, hit - 1):hit + 2])
+            lo = max(0, hit - PIN_NEIGHBOURS)
+            pinned.update(c.path for c in group[lo:hit + PIN_NEIGHBOURS + 1])
     return pinned
 
 

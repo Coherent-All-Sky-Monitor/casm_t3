@@ -178,12 +178,13 @@ observation (`gulp.utc_start`; for a card without a gulp block, the latest
 observation started before its `dump_utc_start`) and the hella gulp
 (`gulp.gulp`; else `(samp + 960) // 8192`). For every stream in that
 observation it pins the chunk with the largest first gulp not above the card's
-gulp, plus the chunk before and the chunk after it, since a dump spans one to
-two gulps and can cross a chunk boundary. A card with no gulp number pins its
-whole observation. A card whose observation cannot be found, or that cannot be
-read, pins every chunk on that node. The rule assumes the card's gulp number
-equals the gulp index in the records; the neighbour chunks absorb an offset of
-up to one chunk (about 1 h). Confirm this against the first deployed records.
+gulp, plus the two chunks before and the two after it. The card carries hella's
+gulp counter, while chunk names use the absolute gulp (first sample divided by
+the gulp length); the two agree only when the ring's `OBS_OFFSET` is 0 at attach.
+The two neighbours on each side absorb an offset of up to two chunks (about
+2 h). A card with no gulp number pins its whole observation. A card whose
+observation cannot be found, or that cannot be read, pins every chunk on that
+node. Confirm the offset against the first deployed records.
 
 Install on corr1 (a deploy step, with the hella recording):
 
@@ -215,8 +216,12 @@ It is not under the janitor's quota, so watch /mnt/nvme3 by hand. To turn the
 archive off, run the plotter with `--events-root ''` (the bundle is then built
 flat in `--plots-dir` without the fil, and the dump no longer waits for one).
 The dump is deleted after plotting (`--delete-dumps`) only when the fil (archive
-on), both PNGs, the summary and the manifest were written; otherwise the log says
-`keeping the dump of <cand>: <what> not written` and the janitor ages it out.
+on), both PNGs, the summary and the manifest were written, and, when the Slack
+figure has hella's flags applied, `<cand>.mask.npz` too (the figure cannot be
+redrawn without its mask); otherwise the log says
+`keeping the dump of <cand>: <what> not written` and the janitor ages it out. A card
+that fails before any product is written removes its empty event folder; a folder that
+holds files is never removed.
 
 Hella mask in the figures (`--mask-records DIR`, default `''` = off). With the
 records root of hella's `MASK_RECORD_DIR` (`/mnt/nvme4/data/casm/hella_masks`)
@@ -232,10 +237,17 @@ Deploy order. (1) casm_io `hella-mask` must be the checkout the services import
 an older casm_io fails every restart). (2) The records root must exist on both
 nodes before hella writes (`mkdir -p` on corr1 and corr2) and before the
 plotters get the flag. (3) Restart the hella observation with `MASK_RECORD_DIR`
-set, then both `t3-dump-plotter` units with `--mask-records <root>` added to
-their `ExecStart` (the unit files in `deploy/systemd/` do not carry it yet),
-then `t3-collect`, then the injection scheduler. Until the records exist, plotters
-started with the flag label every figure unavailable. To revert, drop the flag; no other state changes.
+set, then both `t3-dump-plotter` units (the unit files in `deploy/systemd/`
+carry `--mask-records /mnt/nvme4/data/casm/hella_masks`; copy them to
+`~/.config/systemd/user/` on their node and `daemon-reload`), then `t3-collect`,
+then the injection scheduler. Until the records exist, plotters started with the
+flag label every figure unavailable. To revert, drop the flag; no other state
+changes.
+
+One path on both nodes. The plotters' `--mask-records`, hella's `MASK_RECORD_DIR`
+and the janitor's `--mask-root` must all be the same directory on corr1 and corr2
+(`/mnt/nvme4/data/casm/hella_masks`). A plotter pointed elsewhere labels every
+figure unavailable; a janitor pointed elsewhere leaves the records unswept.
 
 Slack alerts no-op silently until a bot token exists at
 `~/.config/slack_api`.

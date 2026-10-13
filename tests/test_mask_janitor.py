@@ -115,17 +115,19 @@ def test_quota_credits_chunks_already_deleted_by_age(tmp_path):
                             f"{OBS}/hmask_b000_g0000840.hmr"]
 
 
-def test_pending_card_pins_its_chunk_and_both_neighbours(tmp_path):
+def test_pending_card_pins_its_chunk_and_two_neighbours_each_side(tmp_path):
     root, spool = tmp_path / "masks", tmp_path / "spool"
-    for i in range(5):
+    for i in range(7):
         _chunk(root, OBS, i * 420, age_h=40 + i)
-    _gulp_card(spool, "261013aaaaaa", gulp=900)     # chunk g840; neighbours g420, g1260
+    _gulp_card(spool, "261013aaaaaa", gulp=1500)    # chunk g1260; g420, g840, g1680, g2100 around it
     _card(spool, "261013bbbbbb", suffix=".json.done", gulp={"gulp": 0, "utc_start": OBS})
     _card(spool, "261013cccccc", suffix=".json.failed", gulp={"gulp": 0, "utc_start": OBS})
     _sweep(_args(root, spool))
     assert _names(root) == [f"{OBS}/hmask_b000_g0000420.hmr",
                             f"{OBS}/hmask_b000_g0000840.hmr",
-                            f"{OBS}/hmask_b000_g0001260.hmr"]
+                            f"{OBS}/hmask_b000_g0001260.hmr",
+                            f"{OBS}/hmask_b000_g0001680.hmr",
+                            f"{OBS}/hmask_b000_g0002100.hmr"]
 
 
 def test_pin_applies_to_every_stream_in_the_observation(tmp_path):
@@ -133,10 +135,12 @@ def test_pin_applies_to_every_stream_in_the_observation(tmp_path):
     for beam0 in (0, 64):
         for i in range(4):
             _chunk(root, OBS, i * 420, age_h=40, beam0=beam0)
-    _gulp_card(spool, "261013aaaaaa", gulp=10)       # first chunk; neighbour g420
+    _gulp_card(spool, "261013aaaaaa", gulp=10)       # first chunk; neighbours g420, g840
     _sweep(_args(root, spool))
     assert _names(root) == [f"{OBS}/hmask_b000_g0000000.hmr", f"{OBS}/hmask_b000_g0000420.hmr",
-                            f"{OBS}/hmask_b064_g0000000.hmr", f"{OBS}/hmask_b064_g0000420.hmr"]
+                            f"{OBS}/hmask_b000_g0000840.hmr",
+                            f"{OBS}/hmask_b064_g0000000.hmr", f"{OBS}/hmask_b064_g0000420.hmr",
+                            f"{OBS}/hmask_b064_g0000840.hmr"]
 
 
 def test_pin_ignores_other_observations(tmp_path):
@@ -153,14 +157,14 @@ def test_card_without_gulp_block_pins_by_dump_time_and_peak_sample(tmp_path):
     root, spool = tmp_path / "masks", tmp_path / "spool"
     earlier = "2026-10-12-00:00:00"
     for obs in (earlier, OBS):
-        for i in range(4):
+        for i in range(6):
             _chunk(root, obs, i * 420, age_h=40)
     # fast-path card: no gulp block; dump at 19:44 UTC falls in the OBS observation,
     # peak sample 4696190 -> gulp (4696190 + 960) // 8192 = 573, chunk g420
     _card(spool, "261013fastff", samp=4696190, dump_utc_start="2026-10-13-19:44:40.312")
     _sweep(_args(root, spool))
     assert _names(root) == [f"{OBS}/hmask_b000_g0000000.hmr", f"{OBS}/hmask_b000_g0000420.hmr",
-                            f"{OBS}/hmask_b000_g0000840.hmr"]
+                            f"{OBS}/hmask_b000_g0000840.hmr", f"{OBS}/hmask_b000_g0001260.hmr"]
 
 
 def test_card_with_unknown_observation_or_unreadable_pins_everything(tmp_path):
@@ -199,11 +203,12 @@ def test_stuck_card_stops_pinning_after_the_pin_age(tmp_path):
 
 def test_pins_hold_against_the_quota_too(tmp_path):
     root, spool = tmp_path / "masks", tmp_path / "spool"
-    for i, age in enumerate((5, 4, 3, 2)):
+    for i, age in enumerate((7, 6, 5, 4, 3, 2)):
         _chunk(root, OBS, i * 420, age_h=age)
-    _gulp_card(spool, "261013aaaaaa", gulp=0)        # pins g0 and g420
+    _gulp_card(spool, "261013aaaaaa", gulp=0)        # pins g0, g420, g840
     _sweep(_args(root, spool, mask_max_gb=1000 / 1e9))
-    assert _names(root) == [f"{OBS}/hmask_b000_g0000000.hmr", f"{OBS}/hmask_b000_g0000420.hmr"]
+    assert _names(root) == [f"{OBS}/hmask_b000_g0000000.hmr", f"{OBS}/hmask_b000_g0000420.hmr",
+                            f"{OBS}/hmask_b000_g0000840.hmr"]
 
 
 def test_dry_run_deletes_nothing(tmp_path, caplog):
@@ -256,21 +261,23 @@ def test_pid_suffix_is_parsed_and_old_names_still_are(tmp_path):
 
 def test_chunks_with_a_pid_suffix_follow_the_age_rule_and_pins(tmp_path):
     root, spool = tmp_path / "masks", tmp_path / "spool"
-    for i in range(4):
+    for i in range(6):
         _chunk(root, OBS, i * 420, age_h=40, pid=4242)
-    _gulp_card(spool, "261013aaaaaa", gulp=500)         # chunk g420, neighbours g0 and g840
+    _gulp_card(spool, "261013aaaaaa", gulp=500)         # chunk g420, neighbours g0 to g1260
     _sweep(_args(root, spool))
     assert _names(root) == [f"{OBS}/hmask_b000_g0000000_p4242.hmr",
                             f"{OBS}/hmask_b000_g0000420_p4242.hmr",
-                            f"{OBS}/hmask_b000_g0000840_p4242.hmr"]
+                            f"{OBS}/hmask_b000_g0000840_p4242.hmr",
+                            f"{OBS}/hmask_b000_g0001260_p4242.hmr"]
 
 
 def test_two_chunks_starting_at_one_gulp_are_both_pinned(tmp_path):
     # a hella restart at gulp 420: the old and the new process each opened a chunk there
     chunks = [janitor.MaskChunk(HOST, f"/m/{OBS}/p{pid}_g{g}", 1, 0.0, True, OBS, 0, g, pid)
-              for g, pid in ((0, 7), (420, 7), (420, 9), (840, 9))]
+              for g, pid in ((0, 7), (420, 7), (420, 9), (840, 9), (1260, 9), (1680, 9))]
     got = janitor.pinned_chunks(chunks, [_pending(gulp=430)])
-    assert got == {f"/m/{OBS}/p7_g420", f"/m/{OBS}/p9_g420", f"/m/{OBS}/p9_g840"}
+    assert got == {f"/m/{OBS}/p7_g0", f"/m/{OBS}/p7_g420", f"/m/{OBS}/p9_g420",
+                   f"/m/{OBS}/p9_g840", f"/m/{OBS}/p9_g1260"}
 
 
 def test_orphaned_open_chunk_is_deleted_with_a_warning(tmp_path, caplog):
@@ -354,12 +361,27 @@ def _pending(**kw):
 
 
 def test_pinned_chunks_boundaries():
-    chunks = _chunks_for([0, 420, 840, 1260])
+    chunks = _chunks_for([0, 420, 840, 1260, 1680, 2100])
     path = lambda g: f"/m/{OBS}/b0_g{g}"  # noqa: E731
-    assert janitor.pinned_chunks(chunks, [_pending(gulp=419)]) == {path(0), path(420)}
-    assert janitor.pinned_chunks(chunks, [_pending(gulp=420)]) == {path(0), path(420), path(840)}
-    assert janitor.pinned_chunks(chunks, [_pending(gulp=99999)]) == {path(840), path(1260)}
+
+    def pins(gulp, *gs):
+        return janitor.pinned_chunks(chunks, [_pending(gulp=gulp)]) == {path(g) for g in gs}
+    assert pins(419, 0, 420, 840)
+    assert pins(420, 0, 420, 840, 1260)
+    assert pins(1300, 420, 840, 1260, 1680, 2100)
+    assert pins(99999, 1260, 1680, 2100)
     assert janitor.pinned_chunks(chunks, []) == set()
+
+
+def test_pins_cover_a_card_gulp_offset_of_up_to_two_chunks():
+    # the card's gulp counter can trail or lead the absolute gulp in the chunk names
+    chunks = _chunks_for([i * 420 for i in range(9)])
+    path = lambda g: f"/m/{OBS}/b0_g{g}"  # noqa: E731
+    true_gulp = 4 * 420 + 100                    # the chunk that holds the data: g1680
+    for offset in (-2 * 420, -420, 0, 420, 2 * 420):
+        got = janitor.pinned_chunks(chunks, [_pending(gulp=true_gulp + offset)])
+        assert path(1680) in got
+    assert path(1680) not in janitor.pinned_chunks(chunks, [_pending(gulp=true_gulp + 3 * 420)])
 
 
 def test_cli_defaults_leave_dump_behaviour_and_set_mask_defaults(monkeypatch):

@@ -231,18 +231,21 @@ def test_mask_shape_mismatch_falls_back_with_the_real_renderer(tmp_path, monkeyp
     assert env.summary()["hella_mask"] == {"file": None, "reason": "mask render failed: ValueError"}
 
 
-def test_mask_file_write_failure_keeps_the_masked_figure(tmp_path, monkeypatch):
+def test_mask_file_write_failure_keeps_the_masked_figure_and_the_dump(tmp_path, monkeypatch, caplog):
     env = ee.make_env(tmp_path, monkeypatch)
     calls = ee.stub_figure(monkeypatch)
 
     def boom(path, win):
         raise OSError("disk full")
     monkeypatch.setattr(hm, "save_event_mask", boom)
-    env.process()
+    with caplog.at_level(logging.WARNING):
+        env.process()
     assert "mask" in ee.call_for(calls, NAMES["png"])
     h = env.summary()["hella_mask"]
     assert h["file"] is None and h["reason"] == "mask.npz could not be written" and h["coverage"] == 1.0
-    assert not list(env.dump_dir.glob("*.dada"))             # mask.npz is optional
+    # the masked figure cannot be reproduced without its mask: the dump stays
+    assert _dump_kept(env) and "keeping the dump" in caplog.text and "mask.npz" in caplog.text
+    assert env.summary()["data_available"] is True
 
 
 # --- what keeps the dump -----------------------------------------------------------------
@@ -284,6 +287,24 @@ def test_failed_main_render_raises_and_keeps_the_dump(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         env.process()
     assert _dump_kept(env) and not env.dest.exists()
+
+
+def test_card_that_fails_before_any_product_leaves_no_empty_event_folder(tmp_path, monkeypatch):
+    env = ee.make_env(tmp_path, monkeypatch)
+    env.card["local_beam"] = 99                              # no such beam in the dump
+    env.card_path.write_text(json.dumps(env.card))
+    with pytest.raises(Exception):
+        env.process()
+    assert not env.event_dir.exists() and env.events.is_dir()
+    assert _dump_kept(env) and not env.dest.exists()
+
+
+def test_failed_card_keeps_an_event_folder_that_holds_files(tmp_path, monkeypatch):
+    env = ee.make_env(tmp_path, monkeypatch)
+    ee.stub_figure(monkeypatch, fail=lambda name, kw: name == NAMES["png"])
+    with pytest.raises(ValueError):
+        env.process()
+    assert _present(env.event_dir) == {NAMES["fil"]}         # the fil written before the failure
 
 
 @pytest.mark.parametrize("target", ["write_summary", "write_manifest"])

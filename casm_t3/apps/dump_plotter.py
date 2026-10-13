@@ -310,6 +310,14 @@ def render_event(card: dict, dump_files: list[Path], event_dir: Path,
                        sub_incoh_source=sub_source)
 
 
+def _rmdir_if_empty(path: Path) -> None:
+    """Remove a directory only when it holds nothing (rmdir refuses otherwise)."""
+    try:
+        path.rmdir()
+    except OSError:
+        pass
+
+
 def _mirror(files: list[Path], dest_dir: Path) -> None:
     """Copy files into dest_dir, fail-soft: a full staging disk never blocks shipping."""
     try:
@@ -349,17 +357,25 @@ def process_card(card_path: Path, args: argparse.Namespace) -> None:
     bundle_dir.mkdir(parents=True, exist_ok=True)
     names = t3_event.product_names(candname)
 
-    r = render_event(card, files, bundle_dir, mask_records=getattr(args, "mask_records", ""),
-                     fil_path=fil_path)
+    try:
+        r = render_event(card, files, bundle_dir, mask_records=getattr(args, "mask_records", ""),
+                         fil_path=fil_path)
+    except Exception:
+        if event_dir is not None:
+            _rmdir_if_empty(event_dir)       # a card that failed before any product
+        raise
 
     # Plot-then-delete keeps the dump budget disk-neutral. Known-source dumps
     # are kept for folding (the janitor ages them out). The dump goes only when
     # every product that makes the event reproducible was written: the fil (when
-    # the archive is on) and both figures here, the summary and the manifest below.
+    # the archive is on), both figures and, for a masked figure, its mask.npz
+    # here, the summary and the manifest below.
     delete_after = (args.delete_dumps
                     and not str(card.get("trigger_reason", "")).startswith("known_source"))
     missing = [name for name, ok in (("fil", events_root is None or r.fil is not None),
-                                     ("raw figure", r.raw_png is not None)) if not ok]
+                                     ("raw figure", r.raw_png is not None),
+                                     ("mask.npz of the masked figure",
+                                      not r.masked or r.mask_npz is not None)) if not ok]
     will_delete = delete_after and not missing
 
     try:
