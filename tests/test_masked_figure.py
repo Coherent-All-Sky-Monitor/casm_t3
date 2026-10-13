@@ -120,6 +120,33 @@ def test_raw_figure_with_only_a_label_is_the_raw_figure_plus_a_title_note():
     assert lb[0] == la[0] and lb[2] == la[2] and lb[1] == la[1] + "   " + label
 
 
+def test_raw_figure_survives_a_nan_channel_and_inf_cells():
+    """One all-NaN channel and two infinite cells must not blank the figure: every drawn
+    array is finite and the pulse is read at the S/N of the same dump without them."""
+    d = _dump(rfi=False)
+    card = sm.card_for(d)
+    width, tsamp = 2 ** card["width"], d["tsamp"]
+    with _drawn(d) as (_f, axes, _i):
+        ref_peak = _event_peak(axes["profile"], width, tsamp)
+        ref_wf = np.asarray(axes["waterfall"].images[0].get_array())
+    bad = dict(d, data=d["data"].copy())
+    bad["data"][700] = np.nan
+    bad["data"][300, 2100] = np.inf
+    bad["data"][301, 2200] = -np.inf
+    with _drawn(bad) as (fig, axes, info):
+        assert "mask" not in info
+        for name in ("profile", "dm0"):
+            assert np.isfinite(axes[name].lines[0].get_ydata()).all(), name
+        assert np.isfinite(np.asarray(axes["waterfall"].images[0].get_array())).all()
+        assert np.isfinite(np.asarray(axes["dm_time"].images[0].get_array())).all()
+        peak = _event_peak(axes["profile"], width, tsamp)
+        assert "nan" not in _corner_text(axes["profile"]) + _corner_text(axes["dm0"])
+        wf = np.asarray(axes["waterfall"].images[0].get_array())
+    assert ref_peak > 20.0                                   # the pulse is in the dump
+    assert abs(peak - ref_peak) < 0.03 * ref_peak            # and the raw figure still reads it
+    assert wf.shape == ref_wf.shape
+
+
 # --- RFI excluded, pulse recovered ---------------------------------------------------------
 
 def test_mask_removes_rfi_from_the_dm0_series_and_keeps_the_pulse():
@@ -222,6 +249,41 @@ def test_flagged_cells_are_neutral_and_distinct_from_no_record():
     assert plotting.FLAGGED_COLOR != plotting.UNCOVERED_COLOR
 
 
+def test_image_keys_sit_under_their_panels_clear_of_data_text_and_axes():
+    """The key is outside the image axes and at least 2 px from every other text, tick label,
+    title and axes box, with both entries drawn (the tallest key) on both image panels."""
+    card = sg.build_card("default")                         # gulp block: two-line bottom-row titles
+    arr, freqs, tsamp, t_rel = sg.synthetic_data(card["dm"], nchan=512)
+    mask = np.zeros(arr.shape, dtype=bool)
+    mask[:80] = True
+    cov = np.ones(arr.shape[1], dtype=bool)
+    cov[1500:1900] = False
+    d = {"data": arr, "freqs": freqs, "tsamp": tsamp, "t_rel": t_rel}
+    with _drawn(d, card=card, mask=mask, coverage=cov) as (fig, axes, _i):
+        for name in ("waterfall", "dm_time"):
+            plotting._mask_key(axes[name], True, True)
+        fig.canvas.draw()
+        r = fig.canvas.get_renderer()
+        boxes = [a.get_window_extent(r) for ax in fig.axes for a in [ax, *ax.child_axes]]
+        for name in ("waterfall", "dm_time"):
+            lg = axes[name].get_legend()
+            assert [t.get_text() for t in lg.get_texts()] == ["flagged by hella", "no flag record"]
+            key = lg.get_window_extent(r)
+            host = axes[name].get_window_extent(r)
+            assert key.y1 <= host.y0 and key.x1 <= host.x1 + 1e-6           # under the panel
+            pad = 2.0
+            for b in boxes:
+                assert (key.x1 + pad <= b.x0 or b.x1 + pad <= key.x0
+                        or key.y1 + pad <= b.y0 or b.y1 + pad <= key.y0), (name, b)
+            own = set(lg.get_texts())
+            for t in fig.findobj(Text):
+                if t in own or not t.get_visible() or not t.get_text().strip():
+                    continue
+                b = t.get_window_extent(r)
+                assert (key.x1 + pad <= b.x0 or b.x1 + pad <= key.x0
+                        or key.y1 + pad <= b.y0 or b.y1 + pad <= key.y0), (name, t.get_text())
+
+
 def test_event_inside_a_coverage_gap_still_renders():
     d = _dump()
     cov = np.ones(d["data"].shape[1], dtype=bool)
@@ -293,7 +355,7 @@ def test_mask_does_not_move_a_panel_and_leaves_the_bottom_row_alone(tmp_path):
                                             mask=mask, coverage=cov)
     a, b = mimage.imread(raw), mimage.imread(masked)
     assert a.shape[:2] == b.shape[:2] == (H_PX, W_PX)
-    row3_top = int((1.0 - plotting.ROW3[1]) * H_PX) - 70       # the histogram's two-line title
+    row3_top = int((1.0 - plotting.ROW3[1]) * H_PX) - 44       # the histogram's two title lines; the image keys end above them
     assert np.array_equal(a[row3_top:], b[row3_top:])           # T1 trials and sky: unchanged
     assert not np.array_equal(a[:row3_top], b[:row3_top])
 

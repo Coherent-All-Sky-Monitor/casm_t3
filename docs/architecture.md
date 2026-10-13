@@ -233,6 +233,12 @@ varying number of cells has varying noise.
   same sum / sqrt(N_valid) and `profile_snr_masked` per trial DM. With nothing
   flagged it reproduces `dm_time` up to the noise estimate.
 
+The raw path (no `mask`) has its own guard: `normalise` leaves non-finite cells
+(NaN, Inf) out of the per-channel median and MAD and returns 0 there, so a
+channel with no finite cell is all 0. One NaN channel would otherwise turn every
+dedispersed profile to NaN and blank the figure. An all-finite array takes the
+original code path and gives the same bits as before.
+
 Uncovered samples are unavailable, not unflagged data: they are excluded from
 the normalisation statistics and every profile, and the profile is NaN where
 no channel has a record.
@@ -242,7 +248,9 @@ grey (`FLAGGED_COLOR`). Cells whose source samples have no record show as a
 lighter grey under a hatch (`UNCOVERED_COLOR`), so "unknown" differs from
 "flagged"; the waterfall classifies them per cell in the dedispersed frame
 (a gap is slanted by the sweep), the DM-time panel per trial DM. A small key on
-each image panel lists the two kinds actually drawn in its window. In the
+each image panel lists the two kinds actually drawn in its window. It sits under
+the panel, right-aligned with the axes edge on the x-label line (`KEY_DROP_PT`
+below the axes), so it covers no data cell, title or tick label. In the
 profile panels a gap is a break in the line, and a hatched band marks where it
 is missing because the flags are unknown. The bottom row, the T1 trials of the
 card's gulp block, is not touched, and no axes moves (the geometry is constants).

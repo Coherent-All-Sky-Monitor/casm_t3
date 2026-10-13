@@ -54,6 +54,7 @@ import numpy as np
 from matplotlib import colors as mcolors
 from matplotlib.patches import Patch
 from matplotlib.ticker import FormatStrFormatter, MaxNLocator
+from matplotlib.transforms import ScaledTranslation
 
 from casm_t2 import weights_registry
 
@@ -615,6 +616,7 @@ UNCOVERED_HATCH = "////"
 UNCOVERED_EDGE = "0.55"
 UNCOVERED_MIN_FRAC = 0.5         # a display cell/sample is "no record" when this much of it is uncovered
 KEY_PT = 8.5
+KEY_DROP_PT = 20.5               # image-panel key: top this far under the axes, below the tick labels
 
 
 def mask_tag(masked: bool, coverage: np.ndarray | None, label: str | None) -> str:
@@ -669,7 +671,12 @@ def _overlay_uncovered_cells(ax, uncovered: np.ndarray, extent: tuple, origin: s
 
 
 def _mask_key(ax, flagged: bool, uncovered: bool) -> None:
-    """Small key for the grey and hatched cells actually present in an image panel."""
+    """Small key for the grey and hatched cells actually present in an image panel.
+
+    Drawn under the panel, right-aligned with its edge, on the x-label line and
+    clear of the label (centred) and the tick labels above it, so no data cell is
+    covered. A fixed offset in points: the axes do not move.
+    """
     handles = []
     if flagged:
         handles.append(Patch(facecolor=FLAGGED_COLOR, edgecolor="0.3", linewidth=0.5,
@@ -678,8 +685,10 @@ def _mask_key(ax, flagged: bool, uncovered: bool) -> None:
         handles.append(Patch(facecolor=UNCOVERED_COLOR, edgecolor=UNCOVERED_EDGE, hatch=UNCOVERED_HATCH,
                              linewidth=0.0, label="no flag record"))
     if handles:
-        ax.legend(handles=handles, loc="lower right", fontsize=KEY_PT, framealpha=0.9,
-                  borderpad=0.4, labelspacing=0.4, handlelength=1.6, handletextpad=0.6)
+        below = ax.transAxes + ScaledTranslation(0.0, -KEY_DROP_PT / 72.0, ax.figure.dpi_scale_trans)
+        ax.legend(handles=handles, loc="upper right", bbox_to_anchor=(1.0, 0.0), bbox_transform=below,
+                  borderaxespad=0.0, borderpad=0.0, frameon=False, fontsize=KEY_PT,
+                  labelspacing=0.25, handlelength=1.6, handletextpad=0.6)
 
 
 def _flagged_cmap(name: str):

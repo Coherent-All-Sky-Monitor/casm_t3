@@ -6,6 +6,7 @@ wrapped samples invalid), from brute-force recomputation, or from the raw
 functions, which must not have changed.
 """
 import math
+import warnings
 
 import numpy as np
 import pytest
@@ -50,6 +51,35 @@ def test_raw_numerics_are_bit_identical_to_the_pre_mask_code():
         ref[i] = _old_profile_snr(_old_dedisperse(small, dm, f_small, TSAMP).mean(axis=0), 4)
     assert np.array_equal(sp.dm_time(small, f_small, TSAMP, dms, 4), ref)
     assert np.array_equal(sp.downsample(dd, 4, 2), dd.reshape(24, 4, 1500, 2).mean(axis=(1, 3)))
+
+
+def test_normalise_leaves_non_finite_cells_out_of_the_statistics():
+    """A NaN channel, an Inf cell and a -Inf cell: those cells are 0, the statistics of
+    every other cell come from the finite cells of its channel, and an array with
+    nothing non-finite still takes the plain path."""
+    rng = np.random.default_rng(6)
+    data = rng.normal(50.0, 4.0, (30, 1500)).astype(np.float32)
+    data[7] = np.nan                                      # a channel with no finite cell
+    data[3, 100] = np.inf
+    data[3, 900] = -np.inf
+    data[12, 40:60] = np.nan
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        norm = sp.normalise(data)
+    assert norm.dtype == np.float32 and norm.flags.c_contiguous and np.isfinite(norm).all()
+    assert np.all(norm[7] == 0.0)
+    assert norm[3, 100] == 0.0 and norm[3, 900] == 0.0 and np.all(norm[12, 40:60] == 0.0)
+    for c in (3, 12, 20):
+        ok = np.isfinite(data[c])
+        x = data[c, ok].astype(np.float64)
+        med = np.median(x)
+        std = 1.4826 * np.median(np.abs(x - med))
+        assert np.allclose(norm[c, ok], (x - med) / std, atol=2e-5)
+    # channels with only finite cells get what the plain path gives them
+    rows = [c for c in range(30) if c not in (3, 7, 12)]
+    assert np.allclose(norm[rows], _old_normalise(data[rows]), atol=2e-5)
+    # a transposed view comes out C-contiguous here too
+    assert sp.normalise(np.ascontiguousarray(data.T).T).flags.c_contiguous
 
 
 # --- normalisation ------------------------------------------------------------------

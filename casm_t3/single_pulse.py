@@ -31,12 +31,30 @@ def normalise(data: np.ndarray) -> np.ndarray:
     through the arithmetic; every per-channel np.roll in dedisperse would then
     ravel a strided row and a full-resolution DM-time panel took 51 s instead
     of 3 s.
+
+    Non-finite cells (NaN, Inf) are left out of the statistics and come out as 0;
+    a channel with no finite cell is all 0. An all-finite array takes the plain
+    path below, unchanged.
     """
+    finite = np.isfinite(data)
+    if not finite.all():
+        return _normalise_finite_only(data, finite)
     med = np.median(data, axis=1, keepdims=True)
     mad = np.median(np.abs(data - med), axis=1, keepdims=True)
     std = 1.4826 * mad
     std[std == 0] = 1.0
     return np.ascontiguousarray((data - med) / std)
+
+
+def _normalise_finite_only(data: np.ndarray, finite: np.ndarray) -> np.ndarray:
+    """normalise() for an array with non-finite cells: median and 1.4826 x MAD
+    per channel over its finite cells, 0 where the cell is not finite."""
+    med = _row_median(data, finite)[:, None].astype(data.dtype)
+    mad = _row_median(np.abs(data - med), finite)
+    std = 1.4826 * mad
+    std[std == 0] = 1.0
+    out = (data - med) / std[:, None].astype(data.dtype)
+    return np.ascontiguousarray(np.where(finite, out, 0.0).astype(data.dtype, copy=False))
 
 
 def downsample(data: np.ndarray, ffactor: int = 8, tfactor: int = 1) -> np.ndarray:
@@ -111,7 +129,9 @@ def dm_time(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: float,
 
 # ------------------------------------------------------------ validity-weighted numerics
 # Used only when a flag mask is supplied (plotting.draw_candidate_figure(mask=...)).
-# The functions above stay the raw path and are untouched. A masked array is a pair
+# The functions above are the raw path; on all-finite input they match the pre-mask
+# code bit for bit (normalise only takes a different branch when a cell is NaN or
+# Inf). A masked array is a pair
 # (data, valid): ``valid`` is True where the cell is usable (not flagged, flag record
 # exists, finite). Invalid cells carry 0 in ``data`` so plain sums are safe, and
 # validity travels with the data through every step. Median/mean/convolve are not
