@@ -21,6 +21,14 @@ The approved prototype this was ported from is
 /mnt/nvme3/vishnu/candidate_plot_v3/render_proto_prodgeom.py (flags
 ``--polish --beam-panel scatter --top-window 1 --top-right dm0``).
 
+With ``mask`` (hella's recorded flags, True = flagged) every panel is computed
+from the unflagged cells only, through the validity-weighted numerics in
+single_pulse (normalise_masked ... dm_time_masked). Flagged cells are drawn
+grey, time with no flag record (``coverage`` False) hatched, and the title says
+"hella RFI flags applied". Without it the figure is the raw dump as always, and
+``mask_label`` alone only adds a note to the title line (the raw twin of a
+masked figure).
+
 Coordinates come ONLY from the trigger card's ``sky`` block, which t2d fills from
 the weights live at the event time (casm_t2.weights_registry). No static table:
 the one used until 2026-09-02 put a 45 deg median error on every posted
@@ -44,6 +52,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import colors as mcolors
+from matplotlib.patches import Patch
 from matplotlib.ticker import FormatStrFormatter, MaxNLocator
 
 from casm_t2 import weights_registry
@@ -484,6 +493,12 @@ def fmt_snr(value: float) -> str:
     return f"{value:.0f}" if abs(value) >= 100 else f"{value:.1f}"
 
 
+def _fmt_peak(value: float, masked: bool) -> str:
+    """Peak S/N for the corner text; a masked figure says "n/a" when every
+    sample there is unavailable."""
+    return f"{value:.1f}" if (np.isfinite(value) or not masked) else "n/a"
+
+
 def event_utc_text(event_utc: str) -> str:
     """'2026-09-22 00:57:02.250 UTC' from the card's ISO event time."""
     t = datetime.fromisoformat(event_utc)
@@ -588,6 +603,89 @@ def corner_right_fracs(ax, arts, renderer) -> list[float]:
     fraction of the axes width."""
     box = ax.get_window_extent(renderer)
     return [float((a.get_window_extent(renderer).x1 - box.x0) / box.width) for a in arts]
+
+
+# --- masked rendering ------------------------------------------------------------
+
+MASK_TAG = "hella RFI flags applied"
+PARTIAL_TAG = "partial coverage"
+FLAGGED_COLOR = "#8c8c8c"        # flagged cells: neutral grey, the image colour maps' "bad" colour
+UNCOVERED_COLOR = "#e6e6e6"      # no flag record: lighter neutral under a hatch
+UNCOVERED_HATCH = "////"
+UNCOVERED_EDGE = "0.55"
+UNCOVERED_MIN_FRAC = 0.5         # a display cell/sample is "no record" when this much of it is uncovered
+KEY_PT = 8.5
+
+
+def mask_tag(masked: bool, coverage: np.ndarray | None, label: str | None) -> str:
+    """Title suffix: the label if given, else "hella RFI flags applied" for a
+    masked figure; " (partial coverage)" is added when any sample has no flag
+    record. A raw figure without a label has no suffix."""
+    tag = label or (MASK_TAG if masked else "")
+    if masked and coverage is not None and not np.all(coverage) and PARTIAL_TAG not in tag:
+        tag += f" ({PARTIAL_TAG})"
+    return tag
+
+
+def _nanmax(a: np.ndarray, default: float = -np.inf) -> float:
+    """Largest finite value, ``default`` when there is none."""
+    a = np.asarray(a)
+    fin = np.isfinite(a)
+    return float(a[fin].max()) if fin.any() else default
+
+
+def _shade_uncovered_samples(ax, t: np.ndarray, uncovered: np.ndarray) -> None:
+    """Hatched band over the samples (time axis ``t``) with no flag record."""
+    if not np.any(uncovered):
+        return
+    ax.fill_between(t, 0.0, 1.0, where=uncovered, step="mid", transform=ax.get_xaxis_transform(),
+                    facecolor=UNCOVERED_COLOR, edgecolor=UNCOVERED_EDGE, hatch=UNCOVERED_HATCH,
+                    linewidth=0.0, zorder=0, gid="uncovered")
+
+
+def _overlay_uncovered_cells(ax, uncovered: np.ndarray, extent: tuple, origin: str) -> None:
+    """Hatched light-neutral cells over an image drawn with ``imshow(extent=...)``.
+
+    ``uncovered`` is the display grid's boolean array. The region is filled from
+    a contour of that 0/1 field, padded by one cell so it reaches the image
+    edge; the contour of a binary field runs half way between two cell centres,
+    which is the cell edge, so it lines up with the pixels.
+    """
+    if not np.any(uncovered):
+        return
+    nrow, ncol = uncovered.shape
+    x0, x1, y_bottom, y_top = extent
+    x_edges = np.linspace(x0, x1, ncol + 1)
+    y_edges = (np.linspace(y_top, y_bottom, nrow + 1) if origin == "upper"      # row 0 at the top
+               else np.linspace(y_bottom, y_top, nrow + 1))
+    xs = np.concatenate(([x_edges[0]], 0.5 * (x_edges[:-1] + x_edges[1:]), [x_edges[-1]]))
+    ys = np.concatenate(([y_edges[0]], 0.5 * (y_edges[:-1] + y_edges[1:]), [y_edges[-1]]))
+    field = np.pad(uncovered.astype(float), 1, mode="edge")
+    with plt.rc_context({"hatch.color": UNCOVERED_EDGE, "hatch.linewidth": 0.8}):
+        cs = ax.contourf(xs, ys, field, levels=[0.5, 1.5], colors=[UNCOVERED_COLOR],
+                         hatches=[UNCOVERED_HATCH], zorder=1.5)
+    for artist in ([cs] if hasattr(cs, "set_gid") else cs.collections):   # a Collection since matplotlib 3.8
+        artist.set_gid("uncovered")
+
+
+def _mask_key(ax, flagged: bool, uncovered: bool) -> None:
+    """Small key for the grey and hatched cells actually present in an image panel."""
+    handles = []
+    if flagged:
+        handles.append(Patch(facecolor=FLAGGED_COLOR, edgecolor="0.3", linewidth=0.5,
+                             label="flagged by hella"))
+    if uncovered:
+        handles.append(Patch(facecolor=UNCOVERED_COLOR, edgecolor=UNCOVERED_EDGE, hatch=UNCOVERED_HATCH,
+                             linewidth=0.0, label="no flag record"))
+    if handles:
+        ax.legend(handles=handles, loc="lower right", fontsize=KEY_PT, framealpha=0.9,
+                  borderpad=0.4, labelspacing=0.4, handlelength=1.6, handletextpad=0.6)
+
+
+def _flagged_cmap(name: str):
+    cmap = plt.get_cmap(name).copy()
+    cmap.set_bad(FLAGGED_COLOR)
+    return cmap
 
 
 # --- the gulp block -------------------------------------------------------------
@@ -889,7 +987,9 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
                           t_rel_event_s: float, card: dict, ffactor: int | None = None,
                           registry: weights_registry.Registry | None = None,
                           subbands: int | None = None, clean: str | None = None,
-                          scrunches=None, sumthreshold: dict | None = None) -> dict:
+                          scrunches=None, sumthreshold: dict | None = None,
+                          mask: np.ndarray | None = None, coverage: np.ndarray | None = None,
+                          mask_label: str | None = None) -> dict:
     """Draw the v3 candidate figure into ``fig`` (from new_canvas()).
 
     data : (nchan, ntime) float32, raw (dispersed) cutout for the detection beam.
@@ -903,9 +1003,20 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
         what the search saw. ``scrunches`` overrides the SCRUNCH stages of
         that cleaning (single_pulse.hella_clean); None is the deployed set.
         ``sumthreshold`` adds its SumThreshold stage (a dict of parameters).
+    mask : (nchan, ntime) bool aligned with ``data``, True = flagged by hella,
+        or None for the raw figure. Given, every panel (normalisation, band
+        profiles, dedispersion, boxcar S/N, waterfall, DM-time) uses the
+        unflagged cells only and cannot be combined with ``clean``.
+    coverage : (ntime,) bool, False where hella's flags are unknown (no record);
+        those samples are unavailable, drawn hatched, and the title says
+        "partial coverage". None: every sample is covered. Needs ``mask``.
+    mask_label : title suffix. With ``mask`` it replaces "hella RFI flags
+        applied"; without it, it marks a raw figure (for example "before hella
+        RFI flagging; IB subtraction off").
 
-    Returns {"axes": {role: Axes}}. Raises CornerTextError when a corner
-    annotation would reach the t = 0 line.
+    Returns {"axes": {role: Axes}}, plus "mask" (flagged fraction, coverage
+    fraction, live channels, minimum N_valid) when ``mask`` is given. Raises
+    CornerTextError when a corner annotation would reach the t = 0 line.
     """
     tsamp = float(tsamp_s)
     t_rel = float(t_rel_event_s)
@@ -915,6 +1026,12 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
 
     if clean not in CLEANERS:
         raise ValueError(f"clean must be one of {CLEANERS}, not {clean!r}")
+    masked = mask is not None
+    if masked and clean:
+        raise ValueError("mask (hella's recorded flags) and clean (the offline replica) are exclusive")
+    if coverage is not None and not masked:
+        raise ValueError("coverage needs a mask")
+    cov = None if coverage is None else np.asarray(coverage, dtype=bool)
     if clean == "hella":
         samp = card.get("samp")
         sample0 = None if not samp else int(samp) - int(round(t_rel / tsamp))
@@ -923,8 +1040,23 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
             kw["sumthreshold"] = dict(sumthreshold)
         data = single_pulse.hella_clean(data, tsamp, sample0=sample0, **kw)
 
-    norm = single_pulse.normalise(data)
-    dedis = single_pulse.dedisperse(norm, dm, freqs_mhz, tsamp)
+    mask_info = None
+    if masked:
+        valid = single_pulse.valid_cells(mask, cov, data)
+        norm, valid_n = single_pulse.normalise_masked(data, valid)
+        n_live = int(valid_n.any(axis=1).sum())
+        min_nv = single_pulse.min_nvalid_for(n_live)
+        dedis, valid_dd = single_pulse.dedisperse_masked(norm, valid_n, dm, freqs_mhz, tsamp)
+        covered = np.ones(data.shape[1], dtype=bool) if cov is None else cov
+        mask_info = {"flagged_frac": float(np.asarray(mask, dtype=bool)[:, covered].mean())
+                     if covered.any() else float("nan"),
+                     "coverage_frac": float(covered.mean()), "n_live_channels": n_live,
+                     "min_nvalid": min_nv}
+        has_gap = not covered.all()
+    else:
+        norm = single_pulse.normalise(data)
+        dedis = single_pulse.dedisperse(norm, dm, freqs_mhz, tsamp)
+        has_gap = False
     ntime = dedis.shape[1]
     # samples past n_valid are the start of the dump rolled round by dedisperse
     n_valid = max(width * 4, ntime - wrap_samples(dm, freqs_mhz, tsamp))
@@ -943,18 +1075,29 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
     # whole series, the wrap tail included: on 260922lruuie a burst 1.7 s after
     # the event covers most of the unwrapped part, and a MAD over that alone
     # read S/N 29 as 0.7. Only the drawn dedispersed trace stops at the wrap.
-    prof_dd = single_pulse.profile_snr(dedis.mean(axis=0), width)
-    prof_dm0 = single_pulse.profile_snr(norm.mean(axis=0), width)
+    if masked:
+        # sum over valid channels / sqrt(N_valid): unit noise whatever the mask
+        prof_dd = single_pulse.profile_snr_masked(
+            single_pulse.band_profile_masked(dedis, valid_dd, min_nv)[0], width)
+        prof_dm0 = single_pulse.profile_snr_masked(
+            single_pulse.band_profile_masked(norm, valid_n, min_nv)[0], width)
+    else:
+        prof_dd = single_pulse.profile_snr(dedis.mean(axis=0), width)
+        prof_dm0 = single_pulse.profile_snr(norm.mean(axis=0), width)
     t_nat = np.arange(ntime) * tsamp - t_rel
     # the peak is looked for within two boxcars of the sample the card names,
     # so a brighter unrelated burst elsewhere cannot define the on-pulse window
     i_event = int(round(t_rel / tsamp))
     s_lo = max(0, i_event - 2 * width)
     s_hi = min(ntime, i_event + 2 * width + 1)
-    if s_hi > s_lo:
-        i_peak = s_lo + int(np.argmax(prof_dd[s_lo:s_hi]))
+    if s_hi > s_lo and np.isfinite(prof_dd[s_lo:s_hi]).any():
+        i_peak = s_lo + int(np.nanargmax(prof_dd[s_lo:s_hi]))
         peak_dd = float(prof_dd[i_peak])
-        peak_dm0 = float(prof_dm0[s_lo:s_hi].max())
+        peak_dm0 = _nanmax(prof_dm0[s_lo:s_hi], float("nan"))
+    elif s_hi > s_lo:                            # every sample there is unavailable (masked)
+        i_peak = int(np.clip(i_event, 0, ntime - 1))
+        peak_dd = float("nan")
+        peak_dm0 = _nanmax(prof_dm0[s_lo:s_hi], float("nan"))
     else:                                        # event outside the data
         i_peak = int(np.clip(i_event, 0, ntime - 1))
         peak_dd = peak_dm0 = float("nan")
@@ -965,24 +1108,47 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
     # Row 2 left: one subband x one boxcar per pixel, the display grid phased
     # so the boxcar around the profile peak is exactly one column.
     start = int(i_on % width)
-    wf_show = single_pulse.downsample(dedis[:, start:], ffactor, width)
+    if masked:
+        wf_show = single_pulse.downsample_masked(dedis[:, start:], valid_dd[:, start:], ffactor, width)
+        wf_unc = np.zeros(wf_show.shape, dtype=bool)
+        if has_gap:                      # cells whose source samples have no flag record
+            unc_cells = single_pulse.uncovered_cells(covered, data.shape[0], dm, freqs_mhz, tsamp)
+            wf_unc = (single_pulse.block_fraction(unc_cells[:, start:], ffactor, width)
+                      >= UNCOVERED_MIN_FRAC) & np.isnan(wf_show)
+    else:
+        wf_show = single_pulse.downsample(dedis[:, start:], ffactor, width)
     nsub = wf_show.shape[0]      # what the panel shows, after truncation
     t_show = (np.arange(wf_show.shape[1]) * width + start + width / 2) * tsamp - t_rel
 
     # Row 2 right: DM-time on its own, much finer channel averaging (the
     # display subbands would smear the pulse before dedispersion).
     f_dmt = _dmt_plan(dm, width, freqs_mhz, tsamp)
-    small = single_pulse.downsample(norm, f_dmt, 1)
-    f_small = _block_mean_freqs(freqs_mhz, f_dmt)[: small.shape[0]]
     dms = single_pulse.dm_grid(dm)
-    dmt = single_pulse.dm_time(small, f_small, tsamp, dms, width)
+    if masked:
+        # block sums and valid counts, so the band sum keeps its sqrt(N_valid) weighting
+        small_sum, small_cnt = single_pulse.block_sum_masked(norm, valid_n, f_dmt, 1)
+        f_small = _block_mean_freqs(freqs_mhz, f_dmt)[: small_sum.shape[0]]
+        dmt = single_pulse.dm_time_masked(small_sum, small_cnt, f_small, tsamp, dms, width, min_nv)
+        del small_sum, small_cnt
+    else:
+        small = single_pulse.downsample(norm, f_dmt, 1)
+        f_small = _block_mean_freqs(freqs_mhz, f_dmt)[: small.shape[0]]
+        dmt = single_pulse.dm_time(small, f_small, tsamp, dms, width)
     half_prof = max(1.0, 30 * width * tsamp)
     wing_s = K_DM * 0.5 * (dms[-1] - dms[0]) * (freqs_mhz.min() ** -2 - freqs_mhz.max() ** -2)
     half_dmt = max(half_prof, 0.75 * wing_s)
     xlim_prof = (max(-half_prof, t_wf0), min(half_prof, t_wf1))
     xlim_dmt = (max(-half_dmt, t_wf0), min(half_dmt, t_wf1))
     tfactor_dmt = _dmt_tfactor(width, xlim_dmt, tsamp)
-    dmt_disp = single_pulse.downsample_max(dmt, tfactor_dmt)
+    if masked:
+        dmt_disp = single_pulse.downsample_max_masked(dmt, tfactor_dmt)
+        dmt_unc = np.zeros(dmt_disp.shape, dtype=bool)
+        if has_gap:
+            unc_map = single_pulse.uncovered_fraction(covered, f_small, tsamp, dms)
+            dmt_unc = (single_pulse.block_fraction(unc_map, 1, tfactor_dmt) >= UNCOVERED_MIN_FRAC) \
+                & np.isnan(dmt_disp)
+    else:
+        dmt_disp = single_pulse.downsample_max(dmt, tfactor_dmt)
     t_dmt = (np.arange(dmt_disp.shape[1]) * tfactor_dmt + tfactor_dmt / 2) * tsamp - t_rel
 
     # --- axes: every rectangle from the constants, nothing measured
@@ -998,8 +1164,8 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
     sn_dd = prof_dd[:n_ok]
     in_dd = (t_nat[:n_ok] >= xlim_prof[0]) & (t_nat[:n_ok] <= xlim_prof[1])
     in_dm0 = (t_nat >= xlim_prof[0]) & (t_nat <= xlim_prof[1])
-    pmax_dd = float(sn_dd[in_dd].max()) if in_dd.any() else float(sn_dd.max())
-    pmax_dm0 = float(prof_dm0[in_dm0].max()) if in_dm0.any() else float(prof_dm0.max())
+    pmax_dd = _nanmax(sn_dd[in_dd] if in_dd.any() else sn_dd)
+    pmax_dm0 = _nanmax(prof_dm0[in_dm0] if in_dm0.any() else prof_dm0)
     # fit both drawn traces, but never give an unrelated spike more than three
     # times the event's own peak: past that it runs off the top and says so
     top_y = 1.1 * min(max(pmax_dd, pmax_dm0, 5.0), TOP_Y_EVENT_MULT * peak_dd)
@@ -1009,9 +1175,13 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
 
     ax_prof.plot(t_nat[:n_ok], sn_dd, "k-", lw=0.7)
     ax_prof.axvline(0, color=TRIGGER_COLOR, alpha=0.8, lw=0.9)
+    if masked and has_gap:
+        # unavailable because the flags there are unknown (not merely flagged)
+        unc_dd = single_pulse.uncovered_fraction(covered, freqs_mhz, tsamp, [dm])[0] >= UNCOVERED_MIN_FRAC
+        _shade_uncovered_samples(ax_prof, t_nat[:n_ok], unc_dd[:n_ok] & np.isnan(sn_dd))
     ax_prof.set_ylabel(f"boxcar S/N (w = {width})")
     set_wrapped_title(ax_prof, f"Pulse profile dedispersed at DM = {dm:.2f}")
-    left_lines = [f"peak S/N near event: {peak_dd:.1f}"]
+    left_lines = [f"peak S/N near event: {_fmt_peak(peak_dd, masked)}"]
     if pmax_dd > top_ylim[1]:
         left_lines.append(f"max in window: {fmt_snr(pmax_dd)} (off scale)")
     corner_left = place_corner_text(ax_prof, left_lines)
@@ -1026,6 +1196,8 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
     # --- row 1 right: DM = 0 band mean, same window, ticks and y range
     ax_dm0.plot(t_nat, prof_dm0, "-", color="0.3", lw=0.7)
     ax_dm0.axvline(0, color=TRIGGER_COLOR, alpha=0.8, lw=0.9)
+    if masked and has_gap:
+        _shade_uncovered_samples(ax_dm0, t_nat, ~covered)
     ax_dm0.set_ylabel(f"boxcar S/N (w = {width})")
     clean_tag = ""
     if clean == "hella":
@@ -1037,7 +1209,7 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
             clean_tag += " + sumthreshold(" + ",".join(
                 f"{k}={v:g}" for k, v in sumthreshold.items()) + ")"
     set_wrapped_title(ax_dm0, "DM = 0 band-mean timeseries" + clean_tag)
-    right_lines = [f"peak S/N at DM 0 near event: {peak_dm0:.1f}"]
+    right_lines = [f"peak S/N at DM 0 near event: {_fmt_peak(peak_dm0, masked)}"]
     if pmax_dm0 > top_ylim[1]:
         right_lines.append(f"max in window: {fmt_snr(pmax_dm0)} (off scale)")
     corner_right = place_corner_text(ax_dm0, right_lines)
@@ -1050,13 +1222,22 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
     ax_dm0.set_ylim(*top_ylim)
 
     # --- row 2 left: dedispersed waterfall
-    med = np.median(wf_show)
-    sigma = 1.4826 * np.median(np.abs(wf_show - med)) or (wf_show.std() or 1.0)
+    shown = wf_show[np.isfinite(wf_show)] if masked else wf_show
+    if shown.size:
+        med = np.median(shown)
+        sigma = 1.4826 * np.median(np.abs(shown - med)) or (shown.std() or 1.0)
+    else:                                        # nothing unflagged in the window
+        med, sigma = 0.0, 1.0
     # extent is the outer EDGES of the first and last column, not their centres
     half_col = width * tsamp / 2
-    ax_wf.imshow(wf_show, aspect="auto", interpolation="nearest",
-                 extent=[t_show[0] - half_col, t_show[-1] + half_col, freqs_mhz[-1], freqs_mhz[0]],
-                 vmin=med - 1.5 * sigma, vmax=med + 3.5 * sigma, cmap=WATERFALL_CMAP)
+    wf_extent = [t_show[0] - half_col, t_show[-1] + half_col, freqs_mhz[-1], freqs_mhz[0]]
+    ax_wf.imshow(wf_show, aspect="auto", interpolation="nearest", extent=wf_extent,
+                 vmin=med - 1.5 * sigma, vmax=med + 3.5 * sigma,
+                 cmap=_flagged_cmap(WATERFALL_CMAP) if masked else WATERFALL_CMAP)
+    if masked:
+        _overlay_uncovered_cells(ax_wf, wf_unc, wf_extent, "upper")
+        in_win = (t_show >= xlim_prof[0]) & (t_show <= xlim_prof[1])      # the key lists what is drawn
+        _mask_key(ax_wf, bool((np.isnan(wf_show) & ~wf_unc)[:, in_win].any()), bool(wf_unc[:, in_win].any()))
     _dm0_curve(ax_wf, dm, freqs_mhz)
     ax_wf.set_xlim(xlim_prof)
     ax_wf.set_ylim(freqs_mhz.min(), freqs_mhz.max())
@@ -1069,11 +1250,16 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
 
     # --- row 2 right: boxcar S/N vs trial DM
     half_dmt_col = tfactor_dmt * tsamp / 2          # column edges, as on the waterfall
+    dmt_extent = [t_dmt[0] - half_dmt_col, t_dmt[-1] + half_dmt_col, dms[0], dms[-1]]
+    finite_dmt = dmt_disp[np.isfinite(dmt_disp)] if masked else dmt_disp
+    dmt_top = np.percentile(finite_dmt, 99.9) if finite_dmt.size else 8.0
     im_dmt = ax_dmt.imshow(dmt_disp, aspect="auto", origin="lower", interpolation="nearest",
-                           extent=[t_dmt[0] - half_dmt_col, t_dmt[-1] + half_dmt_col,
-                                   dms[0], dms[-1]],
-                           vmin=0, vmax=max(8.0, np.percentile(dmt_disp, 99.9)),
-                           cmap=WATERFALL_CMAP)
+                           extent=dmt_extent, vmin=0, vmax=max(8.0, dmt_top),
+                           cmap=_flagged_cmap(WATERFALL_CMAP) if masked else WATERFALL_CMAP)
+    if masked:
+        _overlay_uncovered_cells(ax_dmt, dmt_unc, dmt_extent, "lower")
+        in_win = (t_dmt >= xlim_dmt[0]) & (t_dmt <= xlim_dmt[1])
+        _mask_key(ax_dmt, bool((np.isnan(dmt_disp) & ~dmt_unc)[:, in_win].any()), bool(dmt_unc[:, in_win].any()))
     cax = ax_dmt.inset_axes(DMT_CBAR_INSET)
     cax.set_label("dm_time_cbar")
     cb = fig.colorbar(im_dmt, cax=cax)
@@ -1100,11 +1286,12 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
     else:
         axes.update(_draw_live_row(fig, card, pointings, dm))
 
+    tag = mask_tag(masked, cov, mask_label)
     source_lines = [
         textwrap.fill(f"{card['candname']}   {event_utc_text(card['event_utc'])}",
                       TITLE_WRAP_CHARS),
         f"hella S/N = {float(card['snr']):.1f}   DM = {dm:.2f} pc cm$^{{-3}}$   "
-        f"width = {width * tsamp * 1e3:.1f} ms",
+        f"width = {width * tsamp * 1e3:.1f} ms" + (f"   {tag}" if tag else ""),
         _coord_line(card, tsamp),
     ]
     fig.suptitle("\n".join(source_lines), y=TITLE_TOP, fontsize=TITLE_FONTSIZE)
@@ -1117,7 +1304,10 @@ def draw_candidate_figure(fig, data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s:
             if frac >= CORNER_ASSERT_FRAC:
                 raise CornerTextError(f"{panel} corner text reaches x fraction {frac:.3f} "
                                       f"(limit {CORNER_ASSERT_FRAC})")
-    return {"axes": axes}
+    info = {"axes": axes}
+    if mask_info is not None:
+        info["mask"] = dict(mask_info, tag=tag)
+    return info
 
 
 def _draw_gulp_row(fig, gulp: dict, card: dict, pointings: dict | None) -> dict:
@@ -1184,7 +1374,9 @@ def make_candidate_figure_v3(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
                              ffactor: int | None = None,
                              registry: weights_registry.Registry | None = None,
                              subbands: int | None = None, clean: str | None = None,
-                             scrunches=None, sumthreshold: dict | None = None) -> Path:
+                             scrunches=None, sumthreshold: dict | None = None,
+                             mask: np.ndarray | None = None, coverage: np.ndarray | None = None,
+                             mask_label: str | None = None) -> Path:
     """Render the v3 candidate figure to ``out_png`` (1510 x 1517 px).
 
     See draw_candidate_figure for the arguments. The figure is closed whether
@@ -1196,7 +1388,8 @@ def make_candidate_figure_v3(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: f
         try:
             draw_candidate_figure(fig, data, freqs_mhz, tsamp_s, t_rel_event_s, card,
                                   ffactor=ffactor, registry=registry, subbands=subbands,
-                                  clean=clean, scrunches=scrunches, sumthreshold=sumthreshold)
+                                  clean=clean, scrunches=scrunches, sumthreshold=sumthreshold,
+                                  mask=mask, coverage=coverage, mask_label=mask_label)
             out_png.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(out_png, dpi=FIG_DPI)      # fixed canvas: same pixel size every time
         finally:
@@ -1383,14 +1576,17 @@ def make_candidate_figure_legacy(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_
 def make_candidate_figure(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png,
                           ffactor: int | None = None, registry=None, layout: str | None = None,
                           subbands: int | None = None, clean: str | None = None,
-                          scrunches=None, sumthreshold: dict | None = None) -> Path:
+                          scrunches=None, sumthreshold: dict | None = None,
+                          mask: np.ndarray | None = None, coverage: np.ndarray | None = None,
+                          mask_label: str | None = None) -> Path:
     """Dispatch on layout: "v2" (the default) draws the v3 figure, "legacy" the
     pre-2026-09-03 one.
 
     ``subbands`` (or the lower-level ``ffactor``) forces the row count of the
     image panels; left unset, it follows the card S/N through subbands_for.
     ``clean`` ("hella") pre-processes the cutout as the deployed search does;
-    the legacy layout does not support it.
+    ``mask`` / ``coverage`` / ``mask_label`` draw hella's recorded flags (see
+    draw_candidate_figure). The legacy layout supports none of these.
     """
     layout = layout or DEFAULT_LAYOUT
     if layout not in LAYOUTS:
@@ -1399,8 +1595,11 @@ def make_candidate_figure(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png
         return make_candidate_figure_v3(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png,
                                         ffactor=ffactor, registry=registry, subbands=subbands,
                                         clean=clean, scrunches=scrunches,
-                                        sumthreshold=sumthreshold)
+                                        sumthreshold=sumthreshold, mask=mask, coverage=coverage,
+                                        mask_label=mask_label)
     if clean:
         raise ValueError(f"clean={clean!r} is only available with the v2 layout")
+    if mask is not None or coverage is not None or mask_label:
+        raise ValueError("mask, coverage and mask_label are only available with the v2 layout")
     return make_candidate_figure_legacy(data, freqs_mhz, tsamp_s, t_rel_event_s, card, out_png,
                                         ffactor=ffactor, subbands=subbands)

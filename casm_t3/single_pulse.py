@@ -109,6 +109,299 @@ def dm_time(data: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: float,
     return out
 
 
+# ------------------------------------------------------------ validity-weighted numerics
+# Used only when a flag mask is supplied (plotting.draw_candidate_figure(mask=...)).
+# The functions above stay the raw path and are untouched. A masked array is a pair
+# (data, valid): ``valid`` is True where the cell is usable (not flagged, flag record
+# exists, finite). Invalid cells carry 0 in ``data`` so plain sums are safe, and
+# validity travels with the data through every step. Median/mean/convolve are not
+# used on NaN-carrying arrays: a NaN spreads over the whole series in np.median and
+# np.convolve, and a mean over a varying number of cells has varying noise.
+
+#: A channel is usable when it keeps at least this fraction of the valid samples of
+#: the best channel (and MIN_CHAN_VALID_SAMPLES of them): median/MAD from fewer
+#: samples scatter by >10% (MAD efficiency ~37%, relative error ~1.2/sqrt(n)).
+MIN_CHAN_VALID_FRAC = 0.10
+MIN_CHAN_VALID_SAMPLES = 64
+#: A time sample is available when at least this fraction of the live channels
+#: (and MIN_NVALID_CHANNELS of them) are valid there. Below it the band profile is
+#: NaN: the S/N of a pulse scales as sqrt(N_valid), so 10% of the band is already
+#: a 3x loss and the profile would hang on a few channels of residual RFI.
+MIN_NVALID_FRAC = 0.10
+MIN_NVALID_CHANNELS = 8
+#: A boxcar window is evaluated when at least this fraction of its samples is
+#: available; a half-empty window has no meaningful S/N.
+MIN_WINDOW_SUPPORT = 0.5
+#: Fewer finite smoothed samples than this and the robust noise is not measurable.
+MIN_NOISE_SAMPLES = 16
+#: A display block (frequency x time average) is shown when at least this fraction
+#: of its cells is valid, so a block of one surviving cell does not show as speckle.
+MIN_BLOCK_VALID_FRAC = 0.5
+
+
+def valid_cells(mask: np.ndarray, coverage: np.ndarray | None, data: np.ndarray) -> np.ndarray:
+    """Usable-cell array from a flag mask (True = flagged), the per-sample
+    ``coverage`` (False = flags unknown) and the data itself (non-finite cells
+    are unusable). Shapes: mask and data (nchan, ntime), coverage (ntime,)."""
+    mask = np.asarray(mask, dtype=bool)
+    if mask.shape != data.shape:
+        raise ValueError(f"mask shape {mask.shape} does not match data {data.shape}")
+    valid = ~mask & np.isfinite(data)
+    if coverage is not None:
+        cov = np.asarray(coverage, dtype=bool)
+        if cov.shape != (data.shape[1],):
+            raise ValueError(f"coverage shape {cov.shape} does not match ntime {data.shape[1]}")
+        valid &= cov[None, :]
+    return valid
+
+
+def _row_median(x: np.ndarray, valid: np.ndarray) -> np.ndarray:
+    """Median of the valid entries of every row, float64; 0 for a row with none."""
+    n = valid.sum(axis=1)
+    work = np.where(valid, x, np.inf).astype(x.dtype, copy=False)
+    work.sort(axis=1)
+    lo = np.take_along_axis(work, np.clip((n - 1) // 2, 0, None)[:, None], axis=1)[:, 0]
+    hi = np.take_along_axis(work, np.clip(n // 2, 0, None)[:, None], axis=1)[:, 0]
+    med = 0.5 * (lo.astype(np.float64) + hi.astype(np.float64))
+    med[n == 0] = 0.0
+    return med
+
+
+def normalise_masked(data: np.ndarray, valid: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """normalise() over the valid cells only: (norm, valid_out).
+
+    Median and 1.4826 x MAD per channel come from the valid samples of that
+    channel; flagged and uncovered cells are excluded, not filled. A channel with
+    fewer valid samples than MIN_CHAN_VALID_FRAC of the best channel's (and
+    MIN_CHAN_VALID_SAMPLES) is invalid in every sample. ``norm`` is 0 where
+    ``valid_out`` is False. C-contiguous, as normalise().
+    """
+    data = np.asarray(data)
+    if not np.issubdtype(data.dtype, np.floating):
+        data = data.astype(np.float32)
+    valid = np.asarray(valid, dtype=bool) & np.isfinite(data)
+    n = valid.sum(axis=1)
+    need = max(MIN_CHAN_VALID_SAMPLES, int(math.ceil(MIN_CHAN_VALID_FRAC * (n.max() if n.size else 0))))
+    live = n >= need
+    valid = valid & live[:, None]
+    med = _row_median(data, valid)
+    mad = _row_median(np.abs(data - med[:, None].astype(data.dtype)), valid)
+    std = 1.4826 * mad
+    std[std == 0] = 1.0
+    out = (data - med[:, None].astype(data.dtype)) / std[:, None].astype(data.dtype)
+    out = np.where(valid, out, 0.0).astype(data.dtype, copy=False)
+    return np.ascontiguousarray(out), valid
+
+
+def _shifts(dm: float, freqs_mhz: np.ndarray, tsamp_s: float) -> np.ndarray:
+    """Per-channel dedispersion shift in samples (as dedisperse())."""
+    f_ref = freqs_mhz.max()
+    delays_s = 4.148808e3 * dm * (freqs_mhz ** -2 - f_ref ** -2)
+    return np.round(delays_s / tsamp_s).astype(int)
+
+
+def _shift_rows(x: np.ndarray, shifts: np.ndarray, fill) -> np.ndarray:
+    """out[i, t] = x[i, t + shifts[i]] without wrap-around: samples that np.roll
+    would bring in from the other end of the row are ``fill`` instead."""
+    nchan, n = x.shape
+    out = np.full((nchan, n), fill, dtype=x.dtype)
+    for i, s in enumerate(shifts):
+        s = int(s)
+        if s >= 0:
+            if s < n:
+                out[i, :n - s] = x[i, s:]
+        elif -s < n:
+            out[i, -s:] = x[i, :n + s]
+    return out
+
+
+def dedisperse_masked(data: np.ndarray, valid: np.ndarray, dm: float, freqs_mhz: np.ndarray,
+                      tsamp_s: float) -> tuple[np.ndarray, np.ndarray]:
+    """dedisperse() with validity moving with the data: (out, valid_out).
+
+    Each channel is shifted by its DM delay as in dedisperse(), but the samples
+    np.roll would wrap round from the start of the row are invalid (0 in
+    ``out``, False in ``valid_out``), not recycled.
+    """
+    shifts = _shifts(dm, freqs_mhz, tsamp_s)
+    return _shift_rows(data, shifts, 0), _shift_rows(valid, shifts, False)
+
+
+def uncovered_cells(coverage: np.ndarray, nchan: int, dm: float, freqs_mhz: np.ndarray,
+                    tsamp_s: float) -> np.ndarray:
+    """(nchan, ntime) bool: the cells of the dedispersed array whose flags are
+    unknown (coverage False at their source sample). Wrapped cells are not
+    uncovered, they are invalid for another reason."""
+    unc = np.broadcast_to(~np.asarray(coverage, dtype=bool), (nchan, len(coverage)))
+    return _shift_rows(unc, _shifts(dm, freqs_mhz, tsamp_s), False)
+
+
+def uncovered_fraction(coverage: np.ndarray, freqs_mhz: np.ndarray, tsamp_s: float,
+                       dms: np.ndarray) -> np.ndarray:
+    """(ndm, ntime) float32: fraction of the channels whose source sample at each
+    (trial DM, dedispersed time) lies in a coverage gap. Wrapped samples count as
+    covered. This is what lets the DM-time panel tell "no flag record" from
+    "flagged" without carrying a third array through the dedispersion."""
+    unc = ~np.asarray(coverage, dtype=bool)
+    n = unc.size
+    out = np.zeros((len(dms), n), dtype=np.float32)
+    if not unc.any():
+        return out
+    for j, dm in enumerate(dms):
+        acc = np.zeros(n)
+        values, counts = np.unique(_shifts(float(dm), freqs_mhz, tsamp_s), return_counts=True)
+        for s, c in zip(values, counts):
+            s = int(s)
+            if s >= 0 and s < n:
+                acc[:n - s] += c * unc[s:]
+            elif s < 0 and -s < n:
+                acc[-s:] += c * unc[:n + s]
+        out[j] = acc / freqs_mhz.size
+    return out
+
+
+def min_nvalid_for(n_live_channels: int) -> int:
+    """Smallest N_valid(t) at which a band-profile sample is available."""
+    return max(MIN_NVALID_CHANNELS, int(math.ceil(MIN_NVALID_FRAC * n_live_channels)))
+
+
+def band_profile_masked(data: np.ndarray, valid: np.ndarray,
+                        min_nvalid: int = 1) -> tuple[np.ndarray, np.ndarray]:
+    """Band-sum profile with unit noise whatever N_valid(t): (profile, nvalid).
+
+    profile[t] = sum over valid channels of data / sqrt(N_valid(t)); for
+    per-channel unit-noise data the noise is 1 at every t, where a mean over the
+    valid channels has noise 1/sqrt(N_valid) that changes with the mask. Samples
+    with N_valid below ``min_nvalid`` are NaN (unavailable).
+    """
+    nvalid = valid.sum(axis=0)
+    total = data.sum(axis=0, dtype=np.float64, where=valid)
+    prof = np.full(data.shape[1], np.nan)
+    ok = nvalid >= max(1, int(min_nvalid))
+    prof[ok] = total[ok] / np.sqrt(nvalid[ok])
+    return prof, nvalid
+
+
+def profile_snr_masked(profile: np.ndarray, width: int) -> np.ndarray:
+    """profile_snr() for a unit-noise profile with NaN gaps.
+
+    The boxcar sums the available samples of each window (same window alignment
+    as profile_snr) and divides by sqrt(n_available), so a gap lowers the S/N of
+    the windows that touch it and never spreads NaN beyond them. A window with
+    fewer than MIN_WINDOW_SUPPORT of its samples available is NaN, as is the whole
+    series when fewer than MIN_NOISE_SAMPLES smoothed samples exist. The result is
+    then divided by its own robust noise, as profile_snr does.
+    """
+    width = max(1, int(width))
+    prof = np.asarray(profile, dtype=np.float64)
+    avail = np.isfinite(prof)
+    out = np.full(prof.shape, np.nan)
+    if avail.sum() < MIN_NOISE_SAMPLES:
+        return out
+    x = np.where(avail, prof - np.median(prof[avail]), 0.0)
+    kernel = np.ones(width)
+    total = np.convolve(x, kernel, mode="same")
+    count = np.convolve(avail.astype(np.float64), kernel, mode="same")
+    ok = count > max(1, math.ceil(MIN_WINDOW_SUPPORT * width)) - 0.5      # counts are integers
+    if ok.sum() < MIN_NOISE_SAMPLES:
+        return out
+    z = np.full(prof.shape, np.nan)
+    z[ok] = total[ok] / np.sqrt(count[ok])
+    zz = z[ok]
+    mad = np.median(np.abs(zz - np.median(zz)))
+    sigma = 1.4826 * mad if mad > 0 else zz.std() or 1.0
+    out[ok] = z[ok] / sigma
+    return out
+
+
+def block_sum_masked(data: np.ndarray, valid: np.ndarray, ffactor: int,
+                     tfactor: int = 1) -> tuple[np.ndarray, np.ndarray]:
+    """Block (sum over valid cells, number of valid cells) of a (nchan, ntime)
+    pair in frequency and time; a trailing partial block is dropped."""
+    nchan, ntime = data.shape
+    nchan -= nchan % ffactor
+    ntime -= ntime % tfactor
+    shape = (nchan // ffactor, ffactor, ntime // tfactor, tfactor)
+    v = valid[:nchan, :ntime].reshape(shape)
+    d = np.where(v, data[:nchan, :ntime].reshape(shape), 0.0)
+    return d.sum(axis=(1, 3), dtype=np.float32), v.sum(axis=(1, 3)).astype(np.float32)
+
+
+def downsample_masked(data: np.ndarray, valid: np.ndarray, ffactor: int = 8,
+                      tfactor: int = 1) -> np.ndarray:
+    """downsample() averaging only the valid cells of each block; NaN where fewer
+    than MIN_BLOCK_VALID_FRAC of the block is valid."""
+    total, count = block_sum_masked(data, valid, ffactor, tfactor)
+    out = np.full(total.shape, np.nan, dtype=np.float32)
+    ok = count >= max(1.0, MIN_BLOCK_VALID_FRAC * ffactor * tfactor)
+    out[ok] = total[ok] / count[ok]
+    return out
+
+
+def block_fraction(flag: np.ndarray, ffactor: int = 1, tfactor: int = 1) -> np.ndarray:
+    """Fraction of True cells in every (ffactor x tfactor) block of a boolean
+    (nrow, ntime) array; a trailing partial block is dropped."""
+    nrow, ntime = flag.shape
+    nrow -= nrow % ffactor
+    ntime -= ntime % tfactor
+    blocks = flag[:nrow, :ntime].reshape(nrow // ffactor, ffactor, ntime // tfactor, tfactor)
+    return blocks.mean(axis=(1, 3))
+
+
+def downsample_max_masked(data: np.ndarray, tfactor: int) -> np.ndarray:
+    """downsample_max() skipping NaN; a block with no finite value stays NaN."""
+    tfactor = max(1, int(tfactor))
+    nrow, ntime = data.shape
+    ntime -= ntime % tfactor
+    blocks = data[:, :ntime].reshape(nrow, ntime // tfactor, tfactor)
+    finite = np.isfinite(blocks)
+    out = np.where(finite, blocks, -np.inf).max(axis=2)
+    out[~finite.any(axis=2)] = np.nan
+    return out.astype(data.dtype, copy=False)
+
+
+def dm_time_masked(total: np.ndarray, count: np.ndarray, freqs_mhz: np.ndarray,
+                   tsamp_s: float, dms: np.ndarray, width: int,
+                   min_nvalid: int = 1) -> np.ndarray:
+    """dm_time() on block sums: boxcar S/N vs (trial DM, time) with NaN where
+    unavailable.
+
+    ``total`` and ``count`` are the (nrow, ntime) block sums and valid counts of
+    normalised data (block_sum_masked(norm, valid, f, 1)); ``freqs_mhz`` are the
+    row centres. For every trial DM the rows are shifted without wrap-around
+    (a wrapped sample is dropped from both sums), summed, divided by
+    sqrt(N_valid) and passed through profile_snr_masked, i.e. the same
+    weighting as band_profile_masked, on subband cells instead of channels.
+    Rows with the same shift are added through a running sum over rows, so the
+    cost per trial is the number of distinct shifts, not the number of rows.
+    """
+    nrow, n = total.shape
+    order = np.argsort(-freqs_mhz, kind="stable")        # shifts are monotone in frequency
+    freqs = freqs_mhz[order]
+    csum = np.zeros((2, nrow + 1, n), dtype=np.float32)  # running sums over rows, [0] data, [1] counts
+    np.cumsum(total[order], axis=0, dtype=np.float32, out=csum[0, 1:])
+    np.cumsum(count[order], axis=0, dtype=np.float32, out=csum[1, 1:])
+    out = np.empty((len(dms), n), dtype=np.float32)
+    for j, dm in enumerate(dms):
+        shifts = _shifts(float(dm), freqs, tsamp_s)
+        starts = np.concatenate(([0], np.flatnonzero(np.diff(shifts)) + 1))
+        stops = np.concatenate((starts[1:], [nrow]))
+        acc_s, acc_n = np.zeros(n), np.zeros(n)
+        for a, b in zip(starts, stops):
+            s = int(shifts[a])
+            if s >= 0 and s < n:
+                acc_s[:n - s] += csum[0, b, s:] - csum[0, a, s:]
+                acc_n[:n - s] += csum[1, b, s:] - csum[1, a, s:]
+            elif s < 0 and -s < n:
+                acc_s[-s:] += csum[0, b, :n + s] - csum[0, a, :n + s]
+                acc_n[-s:] += csum[1, b, :n + s] - csum[1, a, :n + s]
+        prof = np.full(n, np.nan)
+        ok = acc_n > max(1, int(min_nvalid)) - 0.5
+        prof[ok] = acc_s[ok] / np.sqrt(acc_n[ok])
+        out[j] = profile_snr_masked(prof, width)
+    return out
+
+
 # ------------------------------------------------------------- hella-like cleaning
 
 #: What the deployed hella fork (casm_hella_vishnu, casm_hella_refactored) does

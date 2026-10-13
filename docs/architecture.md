@@ -10,7 +10,11 @@ dump_reader returns the (nchan, ntime) cutout for one beam plus its start
 time; single_pulse has the numerics on top of it — robust per-channel
 normalisation, roll-based incoherent dedispersion, block downsampling,
 matched boxcar S/N, and a DM-time transform whose output is in true S/N
-units (which is why the bowtie panel can carry an honest colorbar).
+units (which is why the bowtie panel can carry an honest colorbar). Each step
+has a validity-weighted twin (`normalise_masked`, `dedisperse_masked`,
+`band_profile_masked`, `profile_snr_masked`, `downsample_masked`,
+`dm_time_masked`) that the figure uses only when it is given a flag mask; see
+"Masked figures". The raw functions are unchanged.
 
 ## The candidate figure
 
@@ -161,6 +165,98 @@ pre-2026-09-03 figure. The approved prototype and reference renders are in
 
 The beam and sky panels show the fastest tell in the figure: RFI lights
 many beams at once and a real pulse stays compact on the sky.
+
+## Masked figures (`mask=`, `coverage=`, `mask_label=`)
+
+`make_candidate_figure` and `draw_candidate_figure` (v2 layout only) take
+hella's recorded flag decisions and draw every panel from the unflagged cells.
+
+| argument | shape | meaning |
+|---|---|---|
+| `mask` | (nchan, ntime) bool, aligned with `data` | True = flagged by hella. Same channel order as `data` (channel 0 = 484.375 MHz). |
+| `coverage` | (ntime,) bool | False where hella has no record, so the flags there are unknown. None = every sample covered. Needs `mask`. |
+| `mask_label` | str | Replaces the title suffix. With no `mask` it marks a raw figure. |
+
+Three states: no arguments draws the dump as recorded, exactly as before (the
+PNG matched the pre-mask code byte for byte on seven synthetic cards when the
+mask path was added, and `tests/test_masked_figure.py` compares the drawn
+arrays with frozen copies of the old numerics);
+`mask_label` alone draws the same raw figure with the label on the title line;
+`mask` draws the masked figure. `mask` cannot be combined with
+`clean="hella"` (that is the offline replica, the mask is hella's own
+record) and the legacy layout rejects all three. `draw_candidate_figure`
+returns a `"mask"` entry with `flagged_frac` (of the covered cells, static
+band included), `coverage_frac`, `n_live_channels`, `min_nvalid` and the
+title `tag`.
+
+Numerics. A masked array is a pair (data, valid). A cell is valid when it is
+not flagged, its sample has a flag record and it is finite. Invalid cells hold
+0 and validity travels with the data through each step, because np.median,
+np.mean and np.convolve spread a NaN over the whole series and a mean over a
+varying number of cells has varying noise.
+
+- `normalise_masked`: median and 1.4826 x MAD per channel from that channel's
+  valid samples. Flagged cells are excluded, not zero-filled. A channel with
+  fewer valid samples than `MIN_CHAN_VALID_FRAC` (10%) of the best channel's,
+  or than `MIN_CHAN_VALID_SAMPLES` (64), is invalid everywhere: the median/MAD
+  of fewer samples scatter by more than 10%.
+- `dedisperse_masked`: each channel is shifted as in `dedisperse`, validity
+  with it. The samples np.roll would wrap round are invalid, not recycled.
+- `band_profile_masked`: sum over valid channels divided by sqrt(N_valid(t)),
+  so a unit-noise channel set gives a profile with unit noise at every t
+  whatever the mask. N_valid below `MIN_NVALID_FRAC` (10%) of the live
+  channels (channels valid at all after normalisation; at least
+  `MIN_NVALID_CHANNELS`, 8) makes the sample NaN. At 10% a pulse already
+  loses a factor 3 in S/N, and the profile would rest on a few channels of
+  residual RFI.
+- `profile_snr_masked`: the boxcar sums the available samples of each window
+  (same alignment as `profile_snr`) and divides by sqrt(n_available). A window
+  with fewer than `MIN_WINDOW_SUPPORT` (half) of its samples available is NaN,
+  so a gap lowers the S/N of the windows that touch it and never spreads
+  further. The series is then divided by its own robust noise, as before. Fewer
+  than `MIN_NOISE_SAMPLES` (16) finite values gives all NaN.
+- `downsample_masked`: block mean over the valid cells; a display block with
+  fewer than `MIN_BLOCK_VALID_FRAC` (half) valid is NaN.
+- `dm_time_masked`: the DM-time panel averages channels first, so it works on
+  block sums and valid counts, shifts both without wrap-around, and applies the
+  same sum / sqrt(N_valid) and `profile_snr_masked` per trial DM. With nothing
+  flagged it reproduces `dm_time` up to the noise estimate.
+
+Uncovered samples are unavailable, not unflagged data: they are excluded from
+the normalisation statistics and every profile, and the profile is NaN where
+no channel has a record.
+
+Drawing. Flagged cells are NaN in the image colour maps and show as neutral
+grey (`FLAGGED_COLOR`). Cells whose source samples have no record show as a
+lighter grey under a hatch (`UNCOVERED_COLOR`), so "unknown" differs from
+"flagged"; the waterfall classifies them per cell in the dedispersed frame
+(a gap is slanted by the sweep), the DM-time panel per trial DM. A small key on
+each image panel lists the two kinds actually drawn in its window. In the
+profile panels a gap is a break in the line, and a hatched band marks where it
+is missing because the flags are unknown. The bottom row, the T1 trials of the
+card's gulp block, is not touched, and no axes moves (the geometry is constants).
+
+Title. The suffix goes at the end of line 2, after the width:
+
+| call | suffix |
+|---|---|
+| `mask` | `hella RFI flags applied` |
+| `mask` and `coverage` with any False | `hella RFI flags applied (partial coverage)` |
+| `mask_label` alone (raw figure) | the label, for example `before hella RFI flagging; IB subtraction off` |
+| `mask` and `mask_label` | the label, plus ` (partial coverage)` when coverage is partial |
+
+"Partial coverage" refers to the whole data window, which is what the
+normalisation statistics use, not only the plotted second either side of the
+event. The wording is "applied": hella's standardisation, baseline pass, clip
+and uint8 quantisation are not reproduced, so the figure is not what hella saw.
+
+What this does not do. The 1/sqrt(N_valid) weighting makes the noise uniform
+only to the extent that normalised channels are independent; the reported S/N
+is still measured from the series, so correlated channels are absorbed in the
+overall scale but not in its variation with N_valid. S/N is the figure's own,
+not hella's. Tests: `tests/test_masked_numerics.py`, `tests/test_masked_figure.py`;
+`python tests/synthetic_mask.py <outdir>` renders a masked and a raw figure of a
+synthetic dump with a known pulse, a narrow-band burster and a blob.
 
 ## Sky positions
 

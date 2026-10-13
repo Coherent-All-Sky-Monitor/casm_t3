@@ -15,10 +15,15 @@ human labels are its single write path.
 `dump_reader` parses casm_cand_dump `.dada` files (4096-byte ASCII
 header, float16, 64 beams x 3072 channels). `single_pulse` has the
 numerics: per-channel normalisation, incoherent dedispersion, boxcar S/N,
-a DM-time transform in true S/N units. `plotting` renders the five-panel
+a DM-time transform in true S/N units, and validity-weighted twins of these
+for masked data. `plotting` renders the five-panel
 candidate figure (dedispersed profile, raw DM=0 timeseries, waterfall,
 DM-time bowtie, beam-vs-time context scatter), framed so the pulse always
-sits at t=0 and plots are comparable across events. `skypos` converts
+sits at t=0 and plots are comparable across events. Given hella's recorded
+flag mask (`mask=`, `coverage=`, `mask_label=` on `make_candidate_figure`,
+v2 layout) every panel is computed from the unflagged cells only, with flagged
+cells drawn grey and time with no flag record hatched; see
+docs/architecture.md "Masked figures". `skypos` converts
 beam number plus event time to RA/Dec; the pointing table is an 8 KB JSON
 extracted from the beamforming weights so offline nodes don't need the
 400 MB HDF5.
