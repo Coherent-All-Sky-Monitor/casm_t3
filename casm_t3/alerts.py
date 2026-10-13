@@ -79,11 +79,16 @@ def post_text(text: str, channel: str | None = None) -> bool:
 
 
 def post_candidate(png_path: str | Path, text: str,
-                   channel: str | None = None) -> bool:
-    """Upload a candidate plot with a caption. Returns True on success.
+                   channel: str | None = None,
+                   thread_ts: str | None = None) -> bool | str:
+    """Upload a candidate plot with a caption.
+
+    Returns the message ts when Slack's share resolves in time, True when the
+    upload succeeded but the ts did not resolve, False on failure.
 
     ``channel`` must be a channel ID (C...); defaults to ~/.config/slack_channel.
-    The bot must be a member of the channel (/invite it once).
+    The bot must be a member of the channel (/invite it once). ``thread_ts``
+    (ts of an earlier message in ``channel``) posts the upload as a thread reply.
     """
     token = _load_token()
     channel = channel or load_channel()
@@ -115,13 +120,13 @@ def post_candidate(png_path: str | Path, text: str,
                                timeout=_TIMEOUT_S)
         r2.raise_for_status()
 
+        complete = {"files": [{"id": d1["file_id"], "title": png.stem}],
+                    "channel_id": channel,
+                    "initial_comment": text}
+        if thread_ts:
+            complete["thread_ts"] = thread_ts
         r3 = requests.post(f"{_SLACK_API}/files.completeUploadExternal",
-                           headers=auth,
-                           json={"files": [{"id": d1["file_id"],
-                                            "title": png.stem}],
-                                 "channel_id": channel,
-                                 "initial_comment": text},
-                           timeout=_TIMEOUT_S)
+                           headers=auth, json=complete, timeout=_TIMEOUT_S)
         r3.raise_for_status()
         d3 = r3.json()
         if not d3.get("ok"):

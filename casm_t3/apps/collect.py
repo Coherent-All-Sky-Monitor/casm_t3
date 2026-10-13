@@ -15,6 +15,14 @@ posted twice and a backlog from before Slack was configured is not replayed
 onto the channel. Slack stays a silent no-op until both
 ``~/.config/slack_api`` (bot token) and ``~/.config/slack_channel``
 (channel ID) exist; see alerts.py.
+
+Schema-2 candidate folders (summary JSON has ``"schema": 2``, casm_io
+docs/t3_events.md) are posted only once ``<name>.manifest.json`` exists, which
+the plotter writes last. The main figure and the ``_raw.png`` thread reply are
+separate marker lines (``kind=main``, ``kind=raw``), so a failed reply is
+retried without reposting the main figure. Schema-1 folders keep the single
+``posted <iso> ts=<ts>`` line. A candidate's JSON is never rewritten here: it
+is mirrored from corr2 by ``rsync -a``.
 """
 
 from __future__ import annotations
@@ -24,6 +32,7 @@ import json
 import logging
 import subprocess
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -85,12 +94,111 @@ def _caption(meta: dict, web_base: str) -> str:
             f"{_event_clocks(meta.get('event_utc'))}")
 
 
+@dataclass(slots=True)
+class _Marker:
+    """What a ``.slack`` marker says has been done for one candidate."""
+
+    text: str = ""
+    main: bool = False           # a kind=main line exists
+    main_ts: str | None = None   # message ts of the main post ("unknown" if unresolved)
+    channel: str | None = None   # channel ID of the main post
+    raw: bool = False            # a kind=raw or kind=raw_unthreaded line exists
+    stale: bool = False          # a "skipped stale" line exists
+
+
+def _read_marker(path: Path) -> _Marker:
+    """Parse a marker; schema-1 lines carry no kind= and set neither flag."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return _Marker()
+    m = _Marker(text=text)
+    for line in text.splitlines():
+        words = line.split()
+        if words[:2] == ["skipped", "stale"]:
+            m.stale = True
+        elif words[:1] == ["posted"]:
+            fields = dict(w.split("=", 1) for w in words[2:] if "=" in w)
+            kind = fields.get("kind")
+            if kind == "main":
+                m.main = True
+                m.main_ts = fields.get("ts")
+                m.channel = fields.get("channel")
+            elif kind in ("raw", "raw_unthreaded"):
+                m.raw = True
+    return m
+
+
+def _is_schema2(meta: dict) -> bool:
+    schema = meta.get("schema")
+    return isinstance(schema, int) and schema >= 2
+
+
+def _manifest_ready(d: Path) -> bool:
+    """True when the manifest exists, parses, and agrees with the PNG sizes.
+
+    A listed file whose size on disk differs is still being synced, so wait.
+    """
+    name = d.name
+    try:
+        manifest = json.loads((d / f"{name}.manifest.json").read_text())
+        files = manifest["files"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    if not isinstance(files, dict):
+        return False
+    for png in (d / f"{name}.png", d / f"{name}_raw.png"):
+        entry = files.get(png.name)
+        if png.is_file() and isinstance(entry, dict) and "bytes" in entry:
+            if entry["bytes"] != png.stat().st_size:
+                return False
+    return True
+
+
+def _post_raw(d: Path, marker: _Marker, web_base: str, max_age_h: float,
+              events_dest: Path | None) -> None:
+    """Post ``<name>_raw.png`` once, as a reply to the main post when its ts is known."""
+    raw_png = d / f"{d.name}_raw.png"
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    try:
+        age_s = time.time() - raw_png.stat().st_mtime
+    except OSError:
+        return                       # vanished mid-pass; retry next cycle
+    if age_s > max_age_h * 3600:
+        marker.text += f"skipped stale {stamp}\n"
+        (d / ".slack").write_text(marker.text)
+        _mirror_marker(events_dest, d.name, marker.text)
+        return
+    if not _manifest_ready(d):
+        return
+    threaded = marker.main_ts not in (None, "", "unknown")
+    if threaded:
+        caption = "raw view, before hella RFI flagging"
+    else:
+        link = f"<{web_base.rstrip('/')}/cands/{d.name}|{d.name}>"
+        caption = f"*{link}* raw view, before hella RFI flagging"
+    channel = marker.channel if marker.channel not in (None, "", "unknown") else None
+    res = alerts.post_candidate(raw_png, caption, channel=channel,
+                                thread_ts=marker.main_ts if threaded else None)
+    if res:
+        ts = res if isinstance(res, str) else "unknown"
+        kind = "raw" if threaded else "raw_unthreaded"
+        channel_id = channel or alerts.load_channel() or "unknown"
+        marker.text += f"posted {stamp} ts={ts} channel={channel_id} kind={kind}\n"
+        marker.raw = True
+        (d / ".slack").write_text(marker.text)
+        _mirror_marker(events_dest, d.name, marker.text)
+    # on failure: no marker line, retried next cycle without reposting the main figure
+
+
 def _post_new(candidates: Path, web_base: str, max_age_h: float,
               events_dest: Path | None = None) -> None:
     """Post every candidate dir that has artifacts but no .slack marker.
 
     The marker is mirrored into the matching event dir (if there is one) so
-    the per-event archive records that the candidate was posted.
+    the per-event archive records that the candidate was posted. A schema-2
+    dir waits for its manifest, and its raw view is posted as a thread reply
+    after the main figure.
     """
     if not alerts.configured():
         return                       # leave unmarked: post once configured
@@ -98,14 +206,21 @@ def _post_new(candidates: Path, web_base: str, max_age_h: float,
     for d in sorted(candidates.iterdir()):
         if not d.is_dir():
             continue
-        marker = d / ".slack"
+        marker_path = d / ".slack"
         png, meta_json = d / f"{d.name}.png", d / f"{d.name}.json"
-        if marker.exists() or not (png.is_file() and meta_json.is_file()):
+        if marker_path.exists():
+            # Only a schema-2 marker (kind=main) can still owe the raw reply.
+            if (d / f"{d.name}_raw.png").is_file():
+                marker = _read_marker(marker_path)
+                if marker.main and not marker.raw and not marker.stale:
+                    _post_raw(d, marker, web_base, max_age_h, events_dest)
+            continue
+        if not (png.is_file() and meta_json.is_file()):
             continue
         stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         if now - png.stat().st_mtime > max_age_h * 3600:
             text = f"skipped stale {stamp}\n"
-            marker.write_text(text)
+            marker_path.write_text(text)
             _mirror_marker(events_dest, d.name, text)
             continue
         try:
@@ -113,14 +228,24 @@ def _post_new(candidates: Path, web_base: str, max_age_h: float,
         except (OSError, ValueError) as exc:
             logger.warning("unreadable %s: %s", meta_json, exc)
             continue                 # retry next cycle; maybe mid-copy
+        schema2 = _is_schema2(meta)
+        if schema2 and not _manifest_ready(d):
+            continue                 # incomplete bundle: retry next cycle, no marker
         res = alerts.post_candidate(png, _caption(meta, web_base))
         if res:
             # res is the Slack message ts when resolvable (True otherwise);
             # keeping it makes the post editable/threadable later.
             ts = res if isinstance(res, str) else "unknown"
-            text = f"posted {stamp} ts={ts}\n"
-            marker.write_text(text)
+            if schema2:
+                channel = alerts.load_channel() or "unknown"
+                text = f"posted {stamp} ts={ts} channel={channel} kind=main\n"
+            else:
+                text = f"posted {stamp} ts={ts}\n"
+            marker_path.write_text(text)
             _mirror_marker(events_dest, d.name, text)
+            if schema2 and (d / f"{d.name}_raw.png").is_file():
+                _post_raw(d, _read_marker(marker_path), web_base, max_age_h,
+                          events_dest)
         # on failure: no marker, retried next cycle (fail-soft)
 
 

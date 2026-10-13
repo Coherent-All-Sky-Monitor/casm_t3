@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly CASM T3 hella mask-record janitor
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=t3-mask-janitor.service
+
+[Install]
+WantedBy=timers.target

@@ -26,7 +26,9 @@ extracted from the beamforming weights so offline nodes don't need the
 The daemons: `t3-dump-plotter` (polls the T2 spool, waits for the dump to
 settle, plots, ships artifacts, keeps a per-event archive),
 `t3-janitor` (size and age quotas on the dump trees; never deletes
-anything labelled frb or pulsar), and `t3-replot` for offline
+anything labelled frb or pulsar; `--targets hella_masks` runs the same
+kind of sweep over hella's flag-record chunks, run hourly by
+`t3-mask-janitor.timer`), and `t3-replot` for offline
 re-rendering — use that for all plotter iteration, never card requeue.
 
 The legacy `t3-web` service on 8050 was retired September 25, 2026. Use the
@@ -105,8 +107,20 @@ pull, so both nodes' events land in one place, and mirrors the `.slack`
 marker into the event directory after a successful post. Pass
 `--events-root ''` to the plotter to turn the whole thing off.
 
-`t3-janitor` does not touch the event tree; it only sweeps the `.dada`
-dump directories.
+Schema-2 folders (casm_io `docs/t3_events.md`) are posted differently. The
+plotter writes `<candname>.manifest.json` last, and `t3-collect` posts only
+once it exists, parses, and agrees with the PNG sizes on disk; a folder without
+it is incomplete and is retried every cycle with no marker. The main figure
+goes first (marker line `kind=main`), then `<candname>_raw.png` as a thread
+reply to it (`kind=raw`, or `kind=raw_unthreaded` when the main post's message
+ts did not resolve). The two posts are tracked separately: a failed reply is
+retried on later cycles without reposting the main figure. Schema-1 folders
+keep the single-line marker and get no raw post. `t3-collect` never rewrites a
+candidate's JSON, which `rsync -a` mirrors from corr2.
+
+`t3-janitor` does not touch the event tree. It sweeps the `.dada` dump
+directories and, with `--targets hella_masks`, hella's mask-record chunks
+(docs/operations.md, "Hella mask records").
 
 ## Injection replay
 

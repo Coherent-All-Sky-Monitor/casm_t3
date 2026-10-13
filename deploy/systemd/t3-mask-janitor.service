@@ -1,0 +1,11 @@
+[Unit]
+Description=CASM T3 hella mask-record janitor, one pass (corr1 manages both nodes)
+After=network-online.target
+
+[Service]
+# One sweep per timer tick; the dump janitor (t3-janitor.service) is a separate unit.
+Type=oneshot
+TimeoutStartSec=600
+ExecStart=/home/casm/software/dev/casm_venvs/casm_offline_env/bin/t3-janitor --targets hella_masks --once --mask-max-age-h 24 --mask-max-gb 100 --log-file /mnt/nvme5/casm_pipeline/logs/t3_mask_janitor.log
+StandardOutput=journal
+StandardError=journal

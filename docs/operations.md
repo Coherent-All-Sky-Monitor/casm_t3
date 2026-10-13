@@ -11,7 +11,8 @@ per node or they die at logout.
 | t3-dump-plotter-corr2 | corr2 | plot local dumps, stage artifacts |
 | t3-collect | corr1 | pull corr2 artifacts and events (corr2 cannot ssh back); post candidates to Slack, clickable candidate ID -> casm_monitor `http://localhost:8061/cands/<name>` (`--web-base`) |
 | t3-web | corr1 | Retired September 25, 2026; stopped/disabled. Use casm_monitor on 8061. |
-| t3-janitor | corr1 | disk quota sweep across both nodes |
+| t3-janitor | corr1 | disk quota sweep of the dump trees across both nodes |
+| t3-mask-janitor (timer, hourly) | corr1 | `t3-janitor --targets hella_masks --once`: age and quota sweep of hella's mask records on both nodes |
 
 Both nodes run the same venv. The second node has no internet — install
 there from wheels copied across, and keep the venvs in sync.
@@ -108,6 +109,58 @@ Janitor dry run before trusting a config change:
 prints would-deletes and touches nothing. Whatever the config says, the
 janitor refuses to delete dumps of events labelled frb or pulsar.
 
+Hella mask records (`--targets`, default `dumps`; `hella_masks` or
+`dumps,hella_masks`). The `hella_masks` target holds the record chunks
+hella writes under `--mask-root` (default `/mnt/nvme4/data/casm/hella_masks`,
+casm_io `docs/hella_masks.md`) to an age limit and a quota on each node, corr2
+through the same ssh as the dump sweep, and never opens the T2 database:
+
+    t3-janitor --targets hella_masks --dry-run     # prints would-deletes, touches nothing
+    t3-janitor --targets hella_masks --once
+
+| flag | default | meaning |
+|---|---|---|
+| `--mask-root` | `/mnt/nvme4/data/casm/hella_masks` | `<root>/<UTC_START>/hmask_b<beam0>_g<first_gulp>.hmr` on each node |
+| `--mask-max-age-h` | 24 | delete closed chunks older than this (file mtime) |
+| `--mask-max-gb` | 100 | per-node quota; counts open and closed chunks, deletes closed ones oldest first |
+| `--mask-pin-max-age-h` | 72 | a pending trigger card older than this stops pinning chunks |
+| `--spool` | `/mnt/nvme4/data/casm/t2_spool` | T2 spool whose pending cards pin chunks |
+
+Rules. Only a closed `.hmr` is ever deleted; an open `.hmr.part` never is, even
+when it is old (the log warns about an open chunk untouched for the age limit).
+The quota deletion credits what the age rule already removes. Pinned and open
+chunks stay under both rules, so a node can sit over quota while they alone hold
+it; the log says so. An observation directory is removed once it holds no chunk
+files and has not changed for 10 minutes (`rmdir` refuses a directory with
+anything else in it). When the chunk listing or the spool scan for a node fails
+(ssh down), nothing is deleted on that node in that pass.
+
+Pins. A chunk is kept whatever its age or the quota when a pending trigger card
+could still need it. Pending cards are the bare `*.json` files in the same
+node's T2 spool; the plotter renames a processed card to `.json.done` or
+`.json.failed`, which never pin. For each pending card the janitor finds the
+observation (`gulp.utc_start`; for a card without a gulp block, the latest
+observation started before its `dump_utc_start`) and the hella gulp
+(`gulp.gulp`; else `(samp + 960) // 8192`). For every stream in that
+observation it pins the chunk with the largest first gulp not above the card's
+gulp, plus the chunk before and the chunk after it, since a dump spans one to
+two gulps and can cross a chunk boundary. A card with no gulp number pins its
+whole observation. A card whose observation cannot be found, or that cannot be
+read, pins every chunk on that node. The rule assumes the card's gulp number
+equals the gulp index in the records; the neighbour chunks absorb an offset of
+up to one chunk (about 1 h). Confirm this against the first deployed records.
+
+Install on corr1 (a deploy step, with the hella recording):
+
+    cp ~/software/dev/casm_t3/deploy/systemd/t3-mask-janitor.{service,timer} ~/.config/systemd/user/
+    systemctl --user daemon-reload
+    systemctl --user enable --now t3-mask-janitor.timer
+
+The timer runs `t3-mask-janitor.service`, a one-shot with
+`--targets hella_masks --once --mask-max-age-h 24 --mask-max-gb 100`, log
+`/mnt/nvme5/casm_pipeline/logs/t3_mask_janitor.log`. It is independent of
+`t3-janitor.service`, which keeps the default `dumps` target.
+
 Per-event archive: `/mnt/nvme3/T3/EVENTS/<candname>/` holds the PNG, the
 result JSON, a single-beam float32 `.fil` of the detection beam and the
 `.slack` posting marker, on both nodes, with corr2's copy rsynced to
@@ -118,6 +171,28 @@ corr1 by t3-collect. It is not under the janitor's quota, so watch
 Slack alerts no-op silently until a bot token exists at
 `~/.config/slack_api`.
 
+Schema-2 events (casm_io `docs/t3_events.md`) post in two steps. `t3-collect`
+waits for `<candname>.manifest.json` in the candidate dir (the plotter writes it
+last, and it must parse and agree with the PNG sizes on disk), posts
+`<candname>.png` with the usual caption, then posts `<candname>_raw.png` as a
+thread reply with the caption "raw view, before hella RFI flagging". The
+`.slack` marker carries one line per post:
+
+    posted <iso> ts=<ts> channel=<id> kind=main
+    posted <iso> ts=<ts> channel=<id> kind=raw
+
+A failed reply leaves only the `kind=main` line and is retried every cycle
+without reposting the main figure. When the main post's ts did not resolve,
+the raw figure is posted unthreaded with a caption naming the candidate and the
+line says `kind=raw_unthreaded`. A raw figure older than `--max-age-h` gets a
+`skipped stale` line instead. Schema-1 folders keep today's single
+`posted <iso> ts=<ts>` line, no manifest wait and no raw post. The marker is
+mirrored into the event dir with its full content after each post. A missing
+manifest on a folder older than `--max-age-h` ends as `skipped stale`.
+`alerts.post_candidate` gained `thread_ts` (passed to
+`files.completeUploadExternal`); it still returns the message ts, `True` when
+the ts did not resolve, `False` on failure.
+
 New candidate captions link the candidate ID directly to its 8061 event page
 and show the search S/N, DM, UTC event time and Pacific event time on one text
 line. Pacific time uses `America/Los_Angeles`, choosing PST/PDT for the event
@@ -125,8 +200,8 @@ date. If the local date differs from UTC, both dates are shown. The separate
 "Open in dashboard" label is omitted to save space; Slack may still wrap on a
 narrow display. Readers need their usual SSH tunnel to localhost:8061.
 
-After a caption change, reload only `t3-collect` between posting passes. Keep
-all `.slack` markers so already-posted events remain untouched. T2, plotters,
+After a caption or posting change, reload only `t3-collect` between posting
+passes. Keep all `.slack` markers so already-posted events remain untouched. T2, plotters,
 the monitor, weights and injection routing need no restart or change.
 
 ## Failure isolation

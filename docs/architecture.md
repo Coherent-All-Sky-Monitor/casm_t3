@@ -194,12 +194,23 @@ t3-collect writes after posting. The `.fil` is written straight into the
 event directory before the `.dada` is deleted; the other 63 beams are not
 kept. Every step of it is fail-soft — a full or missing events disk costs
 the archive, never the figure or the Slack post. t3-collect pulls corr2's
-event tree to corr1 the same way it pulls artifacts.
+event tree to corr1 the same way it pulls artifacts. For a schema-2 folder it
+posts only after the manifest the plotter writes last, then sends the raw
+figure as a thread reply; the two posts are separate `.slack` marker lines so a
+failed reply is retried without reposting the main figure (operations.md,
+Runbooks).
 
 t3-janitor sweeps the dump trees on both nodes (ssh for the remote one):
 per-tree size quota and a maximum age, oldest plotted-and-unlabelled
 first. Dumps of events labelled frb or pulsar are never deleted.
 Deletions go into the trigger audit.
+
+The same janitor has a second target, `--targets hella_masks`, for hella's
+flag-record chunks (casm_io `docs/hella_masks.md`). It deletes closed chunks
+past an age limit or over a per-node quota, never an open chunk, and keeps the
+chunks a pending trigger card in the T2 spool could still need. It runs hourly
+from `t3-mask-janitor.timer` and does not open the trigger database. Rules and
+pins: operations.md, "Hella mask records".
 
 ## Web monitor
 
