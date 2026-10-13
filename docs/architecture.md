@@ -7,7 +7,18 @@ float16 frames ordered (outer_time, beam, channel, inner_time), 64 beams
 x 3072 channels x 64 inner samples per frame. The absolute time of the
 first sample is `UTC_START` + `OBS_OFFSET` / `BYTES_PER_SECOND`.
 dump_reader returns the (nchan, ntime) cutout for one beam plus its start
-time; single_pulse has the numerics on top of it — robust per-channel
+time. Several files of one dump are ordered by each header's `OBS_OFFSET`,
+numerically (the byte offsets in the names are not zero-padded, so a name sort
+puts 10000000 before 9000000), and must butt together: each file starts at the
+previous file's `OBS_OFFSET` plus its data bytes, the previous file ends on a
+whole frame, and all are one observation. The returned header carries
+`sample0` (`OBS_OFFSET` / `bytes_per_sample`, the absolute sample index from
+`UTC_START`; `bytes_per_sample` = nbeam x nchan x nbit / 8), `bytes_per_sample`,
+`contiguous` and `contiguity_note` (the first failed check). A dump with a gap,
+an overlap, or an `OBS_OFFSET` that is not a whole number of samples is still
+read in order, but its sample indices are not trusted, so no hella record is
+looked up for it. `read_beams(..., sort_by_name=False)` keeps the caller's order.
+single_pulse has the numerics on top of it — robust per-channel
 normalisation, roll-based incoherent dedispersion, block downsampling,
 matched boxcar S/N, and a DM-time transform whose output is in true S/N
 units (which is why the bowtie panel can carry an honest colorbar). Each step
@@ -258,6 +269,92 @@ not hella's. Tests: `tests/test_masked_numerics.py`, `tests/test_masked_figure.p
 `python tests/synthetic_mask.py <outdir>` renders a masked and a raw figure of a
 synthetic dump with a known pulse, a narrow-band burster and a blob.
 
+## Event folder and hella's flags
+
+`t3-dump-plotter` builds one schema-2 folder per card (casm_io `docs/t3_events.md`)
+in `<events-root>/<candname>/` (with `--events-root ''` the same files are built
+flat in `--plots-dir`, without the fil). Per card:
+
+1. `dump_reader.read_beams` reads the detection beam (`card["local_beam"]`) and
+   the header's `sample0`, `contiguous` and `BFCORR_SUB_INCOH`; the beam goes to
+   `<event>.fil`.
+2. `lookup_mask` asks casm_io `hella_mask.window_mask(--mask-records, UTC_START,
+   card["beam"], sample0, nsamp)` for hella's flags over exactly the samples
+   read. It never raises; it returns a window and a short reason.
+3. With coverage, `<event>.mask.npz` is written (casm_io `save_event_mask`) and
+   `<event>.png` is drawn with `mask=win.combined, coverage=win.coverage`.
+   Without it, or if that render raises, `<event>.png` is the raw beam labelled
+   `hella RFI flags unavailable (<reason>)` and the mask file is removed.
+4. `<event>_raw.png` is always the raw beam, labelled `before hella RFI
+   flagging; IB subtraction on|off|unknown`. The state is `BFCORR_SUB_INCOH` of
+   the dump header ("1"/"true" on, "0"/"false" off; the summary records
+   `sub_incoh` true, false or null and `sub_incoh_source` `dump_header` or
+   `unknown`). It is never assumed.
+5. `t1.csv`, `clusters.csv` and `beams.csv` come from the card (casm_io
+   `write_sidecars`), then the summary JSON (casm_io `summary_from_card`), then
+   `<event>.manifest.json` last (`write_manifest`).
+6. The PNGs and JSON are copied to `--plots-dir` and shipped to the archive tree,
+   and the manifest ships after them, so a reader that waits for it never sees a
+   half-shipped event.
+7. The dump is deleted only when `--delete-dumps` is set, the trigger is not a
+   known source, and the fil (when the archive is on), both PNGs, the summary and
+   the manifest were all written. `mask.npz` and the CSVs are optional. Otherwise
+   the dump stays and the log names what is missing. A failed summary or
+   manifest write raises, so nothing ships and the card is renamed `.failed`.
+
+Reasons a figure has no hella flags (the label and `hella_mask.reason`):
+
+| reason | cause |
+|---|---|
+| `mask records off` | `--mask-records ''` |
+| `dump files not contiguous` | gap, overlap, partial frame or mixed observations (the log has the detail) |
+| `dump has no OBS_OFFSET` / `dump header has no UTC_START` | alignment unknown |
+| `mask record dir missing` | the records root does not exist on this node |
+| `no hella record covers the dump` | root exists, nothing aligned and checksummed overlaps the window |
+| `mask lookup failed: <Error>` | any other exception from casm_io |
+| `mask render failed: <Error>` | the masked figure raised, for example a mask whose channel count differs from the dump |
+
+Partial coverage still draws the masked figure; the title says `(partial
+coverage)` and uncovered time is hatched ("Masked figures"). The flags apply
+to the samples of the dump by index. The records and the dump both count
+samples from `UTC_START`, so the corr1 clock offset that shifts `tstart` and
+`event_utc` does not enter.
+
+The summary's `provenance` holds the observation `UTC_START` (dump header),
+`weights_id` and beam FWHMs (card), `t2d_commit` (card), `t3_commit` (git of the
+casm_t3 source, computed once at startup: `<sha>`, `<sha>+dirty` or `unknown`),
+`hella_binary_md5`, `hella_cfg_sha256` and `hella_flag` (flag1, flag2 and the
+SumThreshold settings, from the first record header used; null without a mask),
+`sub_incoh`, `sub_incoh_source` and `utc_clock`. `dump` has `utc_start`,
+`utc_stop` (from the data read), `sample0`, `nsamp` and `host`. `data_available`
+keeps its meaning (false once the dump is deleted). The `hella_mask` block is
+casm_io's, plus `reason` when the mask was computed but could not be stored
+(`mask.npz could not be written`).
+
+`t3-replay-injection` gives the replay the same pair. With `--mask-records` and
+records that cover the replay window for the injected global beam, `--out` is
+drawn with hella's flags applied (titled `synthetic replay; hella RFI flags
+applied`) and `--raw-out` is the beam before flagging (`synthetic replay; before
+hella RFI flagging`). The pulse is added by the tool and the records describe
+the live stream that carried the real injection, so the title says so. The mask
+replaces `--clean hella`. Without coverage the old path stays: `--clean hella`
+draws the offline replica (titled `synthetic replay; offline replica of hella
+flagging`), otherwise the dump as recorded, labelled unavailable when records
+were asked for. The card JSON gains `kind: synthetic_replay`, `hella_mask`
+(casm_io block) and `replay.raw_plot`; the mask is stored beside `--fil`.
+
+`t3-replot --event-dir DIR` re-renders a stored folder of either schema from its
+fil: `casm_io.load_event` reads it, `event_archive.card_from_event` rebuilds the
+card (`gulp` block, `context.members` and `pointings` come back from the CSVs;
+a schema-1 folder's JSON is the card), `--view masked|raw|both` draws the stored
+mask, the raw beam or both. A mask whose shape differs from the fil is an error.
+A folder written by the plotter re-renders to the same PNG bytes.
+
+Tests: `tests/test_event_folder.py` (end to end on a synthetic dump and records),
+`tests/test_dump_reader.py`, `tests/test_replay_masked.py`,
+`tests/test_replot_event_dir.py`; `python tests/synthetic_event.py <outdir>`
+renders a masked and a raw figure of the synthetic event.
+
 ## Sky positions
 
 Beams are fixed in (alt, az) — the array doesn't track — so a beam's
@@ -272,24 +369,27 @@ bundled tables, a milliarcsecond error against degree-scale beams.
 ## Daemons
 
 t3-dump-plotter polls the local T2 spool for trigger cards, waits for the
-dump file to land and settle, renders the figure, writes the per-event
-archive, ships PNG+JSON artifacts, and renames the card `.done` or
+dump file to land and settle, renders the figure pair, writes the per-event
+folder, ships the PNGs, summary JSON and manifest, and renames the card `.done` or
 `.failed`. One instance per backend node; bulk dump data never crosses
 the network. A node that cannot reach the archive host writes artifacts
 locally for t3-collect to pull. The card-to-figure core is the
-side-effect-free `render_card()`, which t3-replot reuses — iterate on
-plotting with t3-replot, never by re-queueing cards, because the live
-plotter may delete a dump after rendering it. When the dump is gone,
+side-effect-free `render_card()` (raw figure only), which t3-replot reuses;
+`render_event()` is the daemon's version that adds the mask and the raw twin.
+Iterate on plotting with t3-replot, never by re-queueing cards, because the
+live plotter may delete a dump after rendering it. When the dump is gone,
 t3-replot renders from the archived `.fil` (`fil_reader`,
 `render_card_from_fil`).
 
 The per-event archive lives at `<events-root>/<candname>/` (default root
-`/mnt/nvme3/T3/EVENTS`) and holds the PNG, the result JSON, a single-beam
-float32 SIGPROC `.fil` of the detection beam, and the `.slack` marker
-t3-collect writes after posting. The `.fil` is written straight into the
-event directory before the `.dada` is deleted; the other 63 beams are not
-kept. Every step of it is fail-soft — a full or missing events disk costs
-the archive, never the figure or the Slack post. t3-collect pulls corr2's
+`/mnt/nvme3/T3/EVENTS`) and is a schema-2 folder (casm_io `docs/t3_events.md`):
+the two PNGs, the `.fil` of the detection beam, `<candname>.mask.npz` when hella
+records cover the dump, the summary JSON, three CSVs, the manifest written last
+and the `.slack` marker t3-collect writes after posting ("Event folder and
+hella's flags" below). The `.fil` is written straight into the event directory
+before the `.dada` is deleted; the other 63 beams are not kept. Writing the fil,
+the mask or the CSVs is fail-soft: a full or missing events disk costs those
+products, never the figure or the Slack post. t3-collect pulls corr2's
 event tree to corr1 the same way it pulls artifacts. For a schema-2 folder it
 posts only after the manifest the plotter writes last, then sends the raw
 figure as a thread reply; the two posts are separate `.slack` marker lines so a
@@ -304,9 +404,12 @@ Deletions go into the trigger audit.
 The same janitor has a second target, `--targets hella_masks`, for hella's
 flag-record chunks (casm_io `docs/hella_masks.md`). It deletes closed chunks
 past an age limit or over a per-node quota, never an open chunk, and keeps the
-chunks a pending trigger card in the T2 spool could still need. It runs hourly
-from `t3-mask-janitor.timer` and does not open the trigger database. Rules and
-pins: operations.md, "Hella mask records".
+chunks a pending trigger card in the T2 spool could still need; an open chunk
+(`.hmr.part`) untouched for twice the age limit has no live writer and is deleted
+as an orphan, unless pinned. Chunk names are
+`hmask_b<beam0>_g<gulp>_p<pid>.hmr`. It runs hourly from `t3-mask-janitor.timer`
+and does not open the trigger database. Rules and pins: operations.md, "Hella
+mask records".
 
 ## Web monitor
 

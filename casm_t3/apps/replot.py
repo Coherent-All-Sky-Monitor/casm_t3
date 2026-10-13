@@ -19,6 +19,15 @@ filterbank instead: the card's own ``fil`` if that file exists, else
 ``--events-root ''`` turns that fallback off. A card with no dump directory
 never falls back to the current directory: this deployment's working
 directory can itself be a dump directory.
+
+An archived event folder (schema 1 or 2, casm_io ``load_event``) is re-rendered
+from its own .fil and, for the masked view, its stored hella mask:
+
+    t3-replot --event-dir /mnt/nvme3/T3/EVENTS/<cand> --view both --out /tmp/x.png
+
+``--view masked`` draws hella's flags applied (or the raw beam labelled
+"hella RFI flags unavailable" when the folder has no mask), ``raw`` the beam
+before flagging, ``both`` the two (the raw one at ``<out>_raw.png``).
 """
 
 from __future__ import annotations
@@ -27,9 +36,12 @@ import argparse
 import json
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 
-from casm_t3 import single_pulse, plotting
+from casm_io.candidates import t3_event
+
+from casm_t3 import event_archive, fil_reader, single_pulse, plotting
 from casm_t3.apps import dump_plotter
 
 # Dump .dada files land within seconds of the card being written, and
@@ -77,9 +89,65 @@ def card_dump_files(card: dict, card_path: Path, dump_dir: str | None) -> list[P
                                         mtime + MTIME_SLACK_AFTER_S)
 
 
+VIEWS = ("masked", "raw", "both")
+
+
+def render_event_dir(event_dir, out_png, view: str = "both", layout: str | None = None,
+                     subbands: int | None = None) -> list[Path]:
+    """Re-render an archived event folder from its .fil and stored mask.
+
+    ``masked`` is drawn with hella's flags from ``<event>.mask.npz`` (the raw
+    beam labelled "hella RFI flags unavailable (reason)" when the folder has no
+    mask), ``raw`` is the beam before flagging, labelled with the IB subtraction
+    state the folder recorded. ``both`` writes the masked figure to ``out_png``
+    and the raw one to ``<out_png stem>_raw.png``. Returns the PNG paths written.
+    A mask whose shape differs from the .fil is an error, never a silent resize.
+    """
+    if view not in VIEWS:
+        raise ValueError(f"view must be one of {VIEWS}, not {view!r}")
+    ev = t3_event.load_event(event_dir)
+    if ev.fil is None:
+        raise FileNotFoundError(f"{ev.path}: no {ev.candname}.fil to render from")
+    card = event_archive.card_from_event(ev)
+    data, fh = fil_reader.read_fil(ev.fil)
+    t_rel = (datetime.fromisoformat(card["event_utc"]) - fh.t0).total_seconds()
+    span_s = data.shape[1] * fh.tsamp_s
+    if not 0 <= t_rel <= span_s:
+        logging.getLogger("t3.replot").warning(
+            "event time %.2fs falls outside %s of %.2fs; timing offset?",
+            t_rel, ev.fil.name, span_s)
+    out_png = Path(out_png)
+
+    def draw(out: Path, **kw) -> Path:
+        return plotting.make_candidate_figure(data, fh.freqs_mhz, fh.tsamp_s, t_rel, card, out,
+                                              layout=layout, subbands=subbands, **kw)
+
+    written = []
+    if view in ("masked", "both"):
+        if ev.mask is not None:
+            if ev.mask.combined.shape != data.shape:
+                raise ValueError(f"{ev.candname}: mask is {ev.mask.combined.shape} "
+                                 f"(chan, samp), the .fil is {data.shape}")
+            written.append(draw(out_png, mask=ev.mask.combined, coverage=ev.mask.coverage))
+        else:
+            reason = (ev.summary.get("hella_mask") or {}).get("reason") or "no mask in the folder"
+            written.append(draw(out_png, mask_label=event_archive.unavailable_label(reason)))
+    if view in ("raw", "both"):
+        sub = (ev.summary.get("provenance") or {}).get("sub_incoh")
+        raw_out = (out_png.with_name(out_png.stem + "_raw.png") if view == "both" else out_png)
+        written.append(draw(raw_out, mask_label=event_archive.raw_label(sub)))
+    return written
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("card", help="trigger card path (.json or .json.done)")
+    p.add_argument("card", nargs="?", help="trigger card path (.json or .json.done)")
+    p.add_argument("--event-dir", metavar="DIR",
+                   help="re-render this archived event folder (schema 1 or 2) from its .fil "
+                        "and stored hella mask instead of a card; no dump is looked for")
+    p.add_argument("--view", choices=VIEWS, default="both",
+                   help="with --event-dir: the figure with hella's flags applied, the raw "
+                        "figure, or both (raw at <out>_raw.png) (default: %(default)s)")
     p.add_argument("--out", help="output PNG (default: ./<candname>_replot.png)")
     p.add_argument("--dump-dir", help="override the dump directory in the card")
     p.add_argument("--fil", help="render from this single-beam .fil; no dump is looked for")
@@ -105,12 +173,29 @@ def main(argv: list[str] | None = None) -> None:
                         "neighbour reference after the scrunch stages; 'default' or e.g. "
                         "chi1=8,rho=1.5,mmin=16,mmax=512,nb=4,grow_t=0 (single_pulse.sumthreshold_flag)")
     args = p.parse_args(argv)
+    if bool(args.card) == bool(args.event_dir):
+        p.error("give a trigger card or --event-dir, not both and not neither")
+    if args.event_dir and (args.clean != "none" or args.scrunch or args.sumthreshold
+                           or args.fil or args.dump_dir):
+        p.error("--event-dir uses the folder's .fil and stored mask; "
+                "--clean/--scrunch/--sumthreshold/--fil/--dump-dir do not apply")
     clean = None if args.clean == "none" else args.clean
     scrunches = [single_pulse.parse_scrunch(x) for x in args.scrunch] if args.scrunch else None
     sumthreshold = (single_pulse.parse_sumthreshold(args.sumthreshold)
                     if args.sumthreshold is not None else None)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
+    if args.event_dir:
+        name = Path(args.event_dir).resolve().name
+        try:
+            pngs = render_event_dir(args.event_dir, args.out or f"{name}_replot.png",
+                                    view=args.view, layout=args.layout, subbands=args.subbands)
+        except (OSError, ValueError) as exc:
+            sys.exit(f"cannot re-render {args.event_dir}: {exc}")
+        for png in pngs:
+            print(png)
+        return
 
     card_path = Path(args.card)
     card = json.loads(card_path.read_text())

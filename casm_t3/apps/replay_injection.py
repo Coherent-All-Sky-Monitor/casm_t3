@@ -14,6 +14,12 @@ FIFO is touched, no dump is deleted.
 
     t3-replay-injection --inject-id 661 --dump /path/to/dumpdir --out /tmp/inj661.png
     t3-replay-injection --inject-id 661 --dump ... --no-pulse --out /tmp/inj661_raw.png
+
+With ``--mask-records DIR`` (hella's flag records, casm_io docs/hella_masks.md)
+that cover the dump for the injected beam, ``--out`` is drawn with hella's
+flags applied and ``--raw-out`` is the same beam before flagging; both titles
+say "synthetic replay", because the pulse is added here and the records
+describe the live stream that carried the real injection.
 """
 
 from __future__ import annotations
@@ -32,7 +38,10 @@ import numpy as np
 from casm_t2 import beams as t2_beams
 from casm_t2 import timing, weights_registry
 
+from casm_io.candidates import hella_mask, t3_event
+
 from casm_t3 import dump_reader, event_archive, injection, plotting, single_pulse
+from casm_t3.apps import dump_plotter
 
 logger = logging.getLogger("t3.replay_injection")
 
@@ -42,6 +51,11 @@ DEFAULT_CONTEXT_WINDOW_S = 4.0
 # t2d's injection gulp blocks (casm_t2 docs/CARD_SCHEMA.md, "Injection gulp
 # blocks"): the v3 bottom row of the replay figure.
 DEFAULT_GULP_DIR = "/mnt/nvme5/casm_pipeline/injection_gulps"
+
+# Figure title notes; the pulse is synthetic whatever the flags say.
+LABEL_MASKED = "synthetic replay; hella RFI flags applied"
+LABEL_RAW = "synthetic replay; before hella RFI flagging"
+LABEL_REPLICA = "synthetic replay; offline replica of hella flagging"
 
 
 # --------------------------------------------------------------- ledger
@@ -367,6 +381,13 @@ def main(argv: list[str] | None = None) -> None:
                    help=".dada file, a directory of them, or a comma-separated list; "
                         "every file the DM sweep touches is read")
     p.add_argument("--out", required=True, help="output PNG")
+    p.add_argument("--raw-out", metavar="PATH",
+                   help="also write the figure before hella flagging here "
+                        "(title: synthetic replay; before hella RFI flagging)")
+    p.add_argument("--mask-records", default="", metavar="DIR",
+                   help="hella's per-gulp flag records (casm_io docs/hella_masks.md); when "
+                        "they cover the replay window for the injected beam, --out is drawn "
+                        "with hella's flags applied and --clean is not used ('' = off)")
     p.add_argument("--layout", choices=["v2", "legacy"], default="v2")
     p.add_argument("--subbands", type=int, default=None,
                    help="force the number of frequency rows in the waterfall and DM-time "
@@ -525,10 +546,51 @@ def main(argv: list[str] | None = None) -> None:
     scrunches = [single_pulse.parse_scrunch(x) for x in args.scrunch] if args.scrunch else None
     sumthreshold = (single_pulse.parse_sumthreshold(args.sumthreshold)
                     if args.sumthreshold is not None else None)
-    png = plotting.make_candidate_figure(beam2d, header.freqs_mhz, header.tsamp_s,
-                                         t_rel, plot_card, Path(args.out), layout=args.layout,
-                                         subbands=args.subbands, clean=clean,
-                                         scrunches=scrunches, sumthreshold=sumthreshold)
+    # hella's recorded flags for the injected beam over this dump, when asked for
+    # and the v2 layout can draw them; the legacy layout has no mask support.
+    win = reason = None
+    if args.mask_records and args.layout == "legacy":
+        reason = "legacy layout has no mask"
+    elif args.mask_records:
+        win, reason = dump_plotter.lookup_mask(args.mask_records, header, card, ntime)
+
+    def draw(out: Path, **kw) -> Path:
+        return plotting.make_candidate_figure(
+            beam2d, header.freqs_mhz, header.tsamp_s, t_rel, plot_card, out,
+            layout=args.layout, subbands=args.subbands, **kw)
+
+    labelled = args.layout != "legacy"
+    masked = win is not None and reason is None
+    if masked:
+        if clean:
+            logger.info("hella records cover the replay: drawing them instead of --clean %s",
+                        clean)
+        try:
+            png = draw(Path(args.out), mask=win.combined, coverage=win.coverage,
+                       mask_label=LABEL_MASKED)
+        except Exception as exc:                            # noqa: BLE001
+            logger.exception("masked replay figure failed: %s", exc)
+            masked, win, reason = False, None, f"mask render failed: {type(exc).__name__}"
+    if not masked:
+        label = None
+        if labelled:
+            if clean:
+                label = LABEL_REPLICA
+            elif args.mask_records:
+                label = f"synthetic replay; {event_archive.unavailable_label(reason)}"
+        png = draw(Path(args.out), clean=clean, scrunches=scrunches,
+                   sumthreshold=sumthreshold, mask_label=label)
+    raw_png = None
+    if args.raw_out:
+        raw_png = draw(Path(args.raw_out), mask_label=LABEL_RAW if labelled else None)
+
+    mask_file = None
+    if masked and args.fil:
+        try:
+            fil = Path(args.fil)
+            mask_file = hella_mask.save_event_mask(fil.with_name(fil.stem + ".mask.npz"), win)
+        except (OSError, ValueError) as exc:
+            logger.exception("could not write the mask file: %s", exc)
 
     measured = measure_snr(beam2d, header.freqs_mhz, header.tsamp_s, plot_dm, width, t_rel)
     card["replay"] = {"dump_files": [str(f) for f in files], "n_samples": int(ntime),
@@ -538,7 +600,12 @@ def main(argv: list[str] | None = None) -> None:
                       "sumthreshold": sumthreshold,
                       "truncated_below_mhz": (None if trunc_mhz is None
                                               else round(trunc_mhz, 2)),
-                      "measured_boxcar_snr": round(measured, 2), "plot": str(png)}
+                      "measured_boxcar_snr": round(measured, 2), "plot": str(png),
+                      "raw_plot": None if raw_png is None else str(raw_png)}
+    card["kind"] = "synthetic_replay"
+    card["hella_mask"] = t3_event.hella_mask_block(
+        win if masked else None, file=None if mask_file is None else mask_file.name,
+        reason=reason or "mask records not given")
     if args.card_json:
         Path(args.card_json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.card_json).write_text(json.dumps(card, indent=2))

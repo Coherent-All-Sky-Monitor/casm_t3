@@ -1,4 +1,4 @@
-"""t3-janitor hella_masks target: age, quota, pins, dry run (local tmp dirs, no ssh)."""
+"""t3-janitor hella_masks target: age, quota, pins, orphans, dry run (local tmp dirs, no ssh)."""
 import argparse
 import json
 import os
@@ -21,10 +21,11 @@ def _args(root, spool, **kw):
     return argparse.Namespace(**ns)
 
 
-def _chunk(root, obs, gulp, age_h, beam0=0, size=1000, part=False):
+def _chunk(root, obs, gulp, age_h, beam0=0, size=1000, part=False, pid=None):
     d = root / obs
     d.mkdir(parents=True, exist_ok=True)
-    f = d / f"hmask_b{beam0:03d}_g{gulp:07d}.hmr{'.part' if part else ''}"
+    tag = "" if pid is None else f"_p{pid}"
+    f = d / f"hmask_b{beam0:03d}_g{gulp:07d}{tag}.hmr{'.part' if part else ''}"
     f.write_bytes(b"x" * size)
     os.utime(f, (NOW - age_h * 3600, NOW - age_h * 3600))
     return f
@@ -60,7 +61,7 @@ def test_age_rule_deletes_only_old_closed_chunks(tmp_path):
     spool.mkdir()
     _chunk(root, OBS, 0, age_h=30)                  # old, closed: goes
     _chunk(root, OBS, 420, age_h=23)                # young, closed: stays
-    _chunk(root, OBS, 840, age_h=30, part=True)     # old but open: never deleted
+    _chunk(root, OBS, 840, age_h=30, part=True)     # open, under twice the limit: stays
     _sweep(_args(root, spool))
     assert _names(root) == [f"{OBS}/hmask_b000_g0000420.hmr",
                             f"{OBS}/hmask_b000_g0000840.hmr.part"]
@@ -241,6 +242,79 @@ def test_failed_spool_scan_skips_the_host(tmp_path, monkeypatch):
 def test_spool_scan_failure_status_is_an_error(tmp_path):
     with pytest.raises(OSError):
         janitor._run_on(HOST, HOST, "exit 3", check=True)
+
+
+def test_pid_suffix_is_parsed_and_old_names_still_are(tmp_path):
+    root = tmp_path / "masks"
+    _chunk(root, OBS, 420, age_h=1, beam0=64, pid=4242)
+    _chunk(root, OBS, 840, age_h=1, beam0=64, pid=17, part=True)
+    _chunk(root, OBS, 0, age_h=1)                          # no _p<pid>
+    chunks, _ = janitor.list_mask_chunks(HOST, str(root), HOST)
+    got = sorted((c.beam0, c.first_gulp, c.pid, c.closed) for c in chunks)
+    assert got == [(0, 0, 0, True), (64, 420, 4242, True), (64, 840, 17, False)]
+
+
+def test_chunks_with_a_pid_suffix_follow_the_age_rule_and_pins(tmp_path):
+    root, spool = tmp_path / "masks", tmp_path / "spool"
+    for i in range(4):
+        _chunk(root, OBS, i * 420, age_h=40, pid=4242)
+    _gulp_card(spool, "261013aaaaaa", gulp=500)         # chunk g420, neighbours g0 and g840
+    _sweep(_args(root, spool))
+    assert _names(root) == [f"{OBS}/hmask_b000_g0000000_p4242.hmr",
+                            f"{OBS}/hmask_b000_g0000420_p4242.hmr",
+                            f"{OBS}/hmask_b000_g0000840_p4242.hmr"]
+
+
+def test_two_chunks_starting_at_one_gulp_are_both_pinned(tmp_path):
+    # a hella restart at gulp 420: the old and the new process each opened a chunk there
+    chunks = [janitor.MaskChunk(HOST, f"/m/{OBS}/p{pid}_g{g}", 1, 0.0, True, OBS, 0, g, pid)
+              for g, pid in ((0, 7), (420, 7), (420, 9), (840, 9))]
+    got = janitor.pinned_chunks(chunks, [_pending(gulp=430)])
+    assert got == {f"/m/{OBS}/p7_g420", f"/m/{OBS}/p9_g420", f"/m/{OBS}/p9_g840"}
+
+
+def test_orphaned_open_chunk_is_deleted_with_a_warning(tmp_path, caplog):
+    root, spool = tmp_path / "masks", tmp_path / "spool"
+    spool.mkdir()
+    _chunk(root, OBS, 0, age_h=50, part=True, pid=1)     # untouched over 2 x 24 h: orphan
+    _chunk(root, OBS, 420, age_h=47, part=True, pid=2)   # a live writer appends every gulp
+    _chunk(root, OBS, 840, age_h=0.1, part=True, pid=3)
+    with caplog.at_level("WARNING", logger="t3.janitor"):
+        _sweep(_args(root, spool))
+    assert _names(root) == [f"{OBS}/hmask_b000_g0000420_p2.hmr.part",
+                            f"{OBS}/hmask_b000_g0000840_p3.hmr.part"]
+    assert "orphaned open chunk" in caplog.text and "g0000000_p1.hmr.part" in caplog.text
+
+
+def test_orphan_limit_scales_with_the_age_limit(tmp_path):
+    root, spool = tmp_path / "masks", tmp_path / "spool"
+    spool.mkdir()
+    _chunk(root, OBS, 0, age_h=5, part=True)
+    _chunk(root, OBS, 420, age_h=3, part=True)
+    _sweep(_args(root, spool, mask_max_age_h=2.0))       # orphan after 4 h
+    assert _names(root) == [f"{OBS}/hmask_b000_g0000420.hmr.part"]
+
+
+def test_orphan_pinned_by_a_pending_card_stays(tmp_path, caplog):
+    root, spool = tmp_path / "masks", tmp_path / "spool"
+    _chunk(root, OBS, 0, age_h=50, part=True)
+    _gulp_card(spool, "261013aaaaaa", gulp=0, age_h=50)
+    with caplog.at_level("WARNING", logger="t3.janitor"):
+        _sweep(_args(root, spool))
+    assert len(_names(root)) == 1 and "is pinned" in caplog.text
+
+
+def test_orphan_dry_run_deletes_nothing_and_quota_credits_it(tmp_path, caplog):
+    root, spool = tmp_path / "masks", tmp_path / "spool"
+    spool.mkdir()
+    _chunk(root, OBS, 0, age_h=50, part=True)
+    with caplog.at_level("INFO", logger="t3.janitor"):
+        _sweep(_args(root, spool, dry_run=True))
+    assert len(_names(root)) == 1 and "[DRY RUN]" in caplog.text
+    # live run: the orphan's bytes count against the quota before closed chunks go
+    _chunk(root, OBS, 420, age_h=3)
+    _sweep(_args(root, spool, mask_max_gb=1000 / 1e9))
+    assert _names(root) == [f"{OBS}/hmask_b000_g0000420.hmr"]
 
 
 def test_listing_ignores_files_that_are_not_chunks(tmp_path):

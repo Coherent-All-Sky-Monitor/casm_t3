@@ -14,8 +14,9 @@ its span overlaps the trigger's dump window.
 
 A second target, ``hella_masks`` (``--targets hella_masks``), holds hella's
 flag-record chunks (casm_io docs/hella_masks.md) to an age limit and a size
-quota on both nodes. It deletes only closed ``hmask_b*_g*.hmr`` chunks, never
-an open ``.hmr.part``, and keeps every chunk a pending trigger card in the T2
+quota on both nodes. It deletes closed ``hmask_b*_g*_p*.hmr`` chunks and, as an
+orphan, an open ``.hmr.part`` untouched for twice the age limit (a live writer
+appends every gulp), and keeps every chunk a pending trigger card in the T2
 spool could still need (see ``pinned_chunks``). It does not touch the T2
 database. The default target is ``dumps`` alone, so existing invocations are
 unchanged.
@@ -59,10 +60,13 @@ PATROL = [
 ]
 
 
-# Hella mask records: <root>/<UTC_START>/hmask_b<beam0>_g<first_gulp>.hmr, one
-# directory per observation. An open chunk is .hmr.part and is never deleted.
+# Hella mask records: <root>/<UTC_START>/hmask_b<beam0>_g<first_gulp>_p<pid>.hmr, one
+# directory per observation. An open chunk is .hmr.part and is deleted only as
+# an orphan (MASK_ORPHAN_AGE_FACTOR x the age limit untouched). The _p<pid>
+# part is optional so names without it still parse.
 MASK_HOSTS = ("casm-corr1", "casm-corr2")
-MASK_CHUNK_RE = re.compile(r"^hmask_b(\d+)_g(\d+)\.hmr(\.part)?$")
+MASK_CHUNK_RE = re.compile(r"^hmask_b(\d+)_g(\d+)(?:_p(\d+))?\.hmr(\.part)?$")
+MASK_ORPHAN_AGE_FACTOR = 2.0   # open chunk untouched this many age limits is orphaned
 GULP_SAMP = 8192          # samples per hella gulp
 GULP_LEAD_SAMP = 960      # hella gulp g carries samples g*8192-960 .. g*8192+7231
 MASK_DIR_GRACE_S = 600.0  # an observation dir changed this recently is not removed
@@ -197,6 +201,7 @@ class MaskChunk:
     obs: str           # UTC_START directory name
     beam0: int         # global index of the stream's first beam
     first_gulp: int
+    pid: int = 0       # writing process, 0 for a name without _p<pid>
 
 
 @dataclass(slots=True)
@@ -287,10 +292,11 @@ def list_mask_chunks(host: str, root: str, local_host: str) -> tuple[list[MaskCh
             m = MASK_CHUNK_RE.match(path_p.name)
             if m:
                 chunks.append(MaskChunk(host, path, size_i, mtime_f,
-                                        closed=m.group(3) is None,
+                                        closed=m.group(4) is None,
                                         obs=path_p.parent.name,
                                         beam0=int(m.group(1)),
-                                        first_gulp=int(m.group(2))))
+                                        first_gulp=int(m.group(2)),
+                                        pid=int(m.group(3) or 0)))
     return chunks, dirs
 
 
@@ -360,7 +366,7 @@ def pinned_chunks(chunks: list[MaskChunk], cards: list[PendingCard]) -> set[str]
         for c in in_obs:
             by_stream.setdefault(c.beam0, []).append(c)
         for group in by_stream.values():
-            group.sort(key=lambda c: c.first_gulp)
+            group.sort(key=lambda c: (c.first_gulp, c.pid))
             hit = max((i for i, c in enumerate(group) if c.first_gulp <= gulp), default=0)
             pinned.update(c.path for c in group[max(0, hit - 1):hit + 2])
     return pinned
@@ -376,9 +382,10 @@ def sweep_masks(args, local_host: str, hosts=MASK_HOSTS, now: float | None = Non
 
     Per host: closed chunks older than ``--mask-max-age-h`` go, then the oldest
     closed chunks go until the tree (open chunks included) is within
-    ``--mask-max-gb``. Pinned chunks stay for both rules. A host whose chunk
-    list or spool scan fails is skipped whole: with the pins unknown nothing
-    may be deleted there.
+    ``--mask-max-gb``. An open chunk untouched for MASK_ORPHAN_AGE_FACTOR times
+    the age limit has no live writer and goes too, with a warning. Pinned
+    chunks stay for every rule. A host whose chunk list or spool scan fails is
+    skipped whole: with the pins unknown nothing may be deleted there.
     """
     now = time.time() if now is None else now
     tag = " [DRY RUN]" if args.dry_run else ""
@@ -396,14 +403,22 @@ def sweep_masks(args, local_host: str, hosts=MASK_HOSTS, now: float | None = Non
                                host, card.name, (now - card.mtime) / 3600)
             else:
                 live.append(card)
-        for c in chunks:
-            if not c.closed and now - c.mtime > args.mask_max_age_h * 3600:
-                logger.warning("open chunk %s:%s untouched for %.0f h; left in place",
-                               host, c.path, (now - c.mtime) / 3600)
+        orphan_s = MASK_ORPHAN_AGE_FACTOR * args.mask_max_age_h * 3600
         total_b = sum(c.size for c in chunks)
         closed = sorted((c for c in chunks if c.closed), key=lambda c: (c.mtime, c.path))
         pinned = pinned_chunks(chunks, live)
         doomed: list[MaskChunk] = []
+        for c in chunks:
+            if c.closed or now - c.mtime <= orphan_s:
+                continue
+            if c.path in pinned:
+                logger.warning("orphaned open chunk %s:%s (untouched %.0f h) is pinned; "
+                               "left in place", host, c.path, (now - c.mtime) / 3600)
+                continue
+            logger.warning("orphaned open chunk %s:%s untouched for %.0f h (limit %.0f h): "
+                           "no live writer, deleting", host, c.path,
+                           (now - c.mtime) / 3600, orphan_s / 3600)
+            doomed.append(c)
         for c in closed:
             if now - c.mtime > args.mask_max_age_h * 3600 and c.path not in pinned:
                 doomed.append(c)

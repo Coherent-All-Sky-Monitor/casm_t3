@@ -7,8 +7,8 @@ per node or they die at logout.
 
 | unit | host | role |
 |---|---|---|
-| t3-dump-plotter-corr1 | corr1 | plot local dumps |
-| t3-dump-plotter-corr2 | corr2 | plot local dumps, stage artifacts |
+| t3-dump-plotter-corr1 | corr1 | plot local dumps; `--mask-records <dir>` applies hella's flags (below) |
+| t3-dump-plotter-corr2 | corr2 | plot local dumps, stage artifacts; same flag |
 | t3-collect | corr1 | pull corr2 artifacts and events (corr2 cannot ssh back); post candidates to Slack, clickable candidate ID -> casm_monitor `http://localhost:8061/cands/<name>` (`--web-base`) |
 | t3-web | corr1 | Retired September 25, 2026; stopped/disabled. Use casm_monitor on 8061. |
 | t3-janitor | corr1 | disk quota sweep of the dump trees across both nodes |
@@ -32,6 +32,20 @@ explicitly. `--events-root ''` turns the fallback off. A card with no
 `dump_dir` is never looked up in the current directory.
 
     t3-replot /mnt/nvme3/T3/EVENTS/260922lruuie/260922lruuie.json --out /tmp/x.png
+
+An archived event folder (schema 1 or 2) is re-rendered from its own `.fil`
+and, for the masked view, its stored `<cand>.mask.npz`:
+
+    t3-replot --event-dir /mnt/nvme3/T3/EVENTS/<cand> --view both --out /tmp/x.png
+
+`--view masked` draws hella's flags applied (`hella RFI flags unavailable
+(<reason>)` on the raw beam when the folder has no mask, which is every schema-1
+folder), `raw` the beam before flagging, `both` the two (`/tmp/x.png` and
+`/tmp/x_raw.png`, the default). The card comes back from the summary and the
+three CSVs, so the bottom row is the one posted. `--clean`, `--scrunch`,
+`--sumthreshold`, `--fil` and `--dump-dir` do not apply with `--event-dir` (the
+stored mask is hella's own flags), and a mask whose shape differs from the fil
+is an error. The card-path options above are unchanged.
 
 `--clean hella` (also on `t3-replay-injection`) first passes the cutout
 through the deployed hella flagging stage (static 470-484 MHz mask,
@@ -90,6 +104,24 @@ grey as `also_triggerable`. dt_s is re-referenced when `--event-utc` differs
 from the cluster peak. No block (unrecovered shot, shots before 2026-09-22, or
 `--gulp-dir ''`) gives the legacy bottom row, as before.
 
+`t3-replay-injection --mask-records DIR --raw-out PATH`: with hella's flag
+records covering the replay window for the injected global beam (casm_io
+`docs/hella_masks.md`), `--out` is drawn with the recorded flags applied and
+`--raw-out` is the same beam before flagging. Titles end `synthetic replay; hella
+RFI flags applied` and `synthetic replay; before hella RFI flagging`: the pulse
+is added here, the records describe the live stream that carried the real
+injection. The flags replace `--clean hella` for that figure. When nothing
+covers the window, `--clean hella` keeps the offline replica path (title
+`synthetic replay; offline replica of hella flagging`); with records asked for
+and no `--clean`, the dump as recorded is labelled `hella RFI flags unavailable
+(<reason>)`. `--raw-out` without records just writes the raw figure. The card
+JSON (`--card-json`) gains `kind: "synthetic_replay"`, `hella_mask` and
+`replay.raw_plot`; the mask is stored next to `--fil` as `<name>.mask.npz`.
+Both flags default to off, so existing invocations are unchanged except that
+the card JSON carries `kind` and `hella_mask`. casm_t2's `injection.replay.
+mask_records` passes `--mask-records` and always passes `--raw-out`, so deploy
+this tool before restarting the injection scheduler with that config.
+
 Retroactivity: anything baked into the PNG (layout, titles, framing)
 applies from the next event onward, because dumps may already be gone.
 Anything computed from the DB at page-render time — reasons, tables,
@@ -120,17 +152,20 @@ through the same ssh as the dump sweep, and never opens the T2 database:
 
 | flag | default | meaning |
 |---|---|---|
-| `--mask-root` | `/mnt/nvme4/data/casm/hella_masks` | `<root>/<UTC_START>/hmask_b<beam0>_g<first_gulp>.hmr` on each node |
+| `--mask-root` | `/mnt/nvme4/data/casm/hella_masks` | `<root>/<UTC_START>/hmask_b<beam0>_g<first_gulp>_p<pid>.hmr` on each node (`_p<pid>` optional when parsing) |
 | `--mask-max-age-h` | 24 | delete closed chunks older than this (file mtime) |
 | `--mask-max-gb` | 100 | per-node quota; counts open and closed chunks, deletes closed ones oldest first |
 | `--mask-pin-max-age-h` | 72 | a pending trigger card older than this stops pinning chunks |
 | `--spool` | `/mnt/nvme4/data/casm/t2_spool` | T2 spool whose pending cards pin chunks |
 
-Rules. Only a closed `.hmr` is ever deleted; an open `.hmr.part` never is, even
-when it is old (the log warns about an open chunk untouched for the age limit).
-The quota deletion credits what the age rule already removes. Pinned and open
-chunks stay under both rules, so a node can sit over quota while they alone hold
-it; the log says so. An observation directory is removed once it holds no chunk
+Rules. A closed `.hmr` goes by the age and quota rules. An open `.hmr.part` is
+left alone while it is younger than twice `--mask-max-age-h` (a live writer
+appends every gulp, so its mtime is fresh); past that it is an orphan, a warning
+names it and it is deleted, unless a pending card pins it (then the warning says
+so and it stays). The quota deletion credits what the age rule and the orphan
+rule already remove. Pinned and live
+open chunks stay under every rule, so a node can sit over quota while they alone
+hold it; the log says so. An observation directory is removed once it holds no chunk
 files and has not changed for 10 minutes (`rmdir` refuses a directory with
 anything else in it). When the chunk listing or the spool scan for a node fails
 (ssh down), nothing is deleted on that node in that pass.
@@ -161,12 +196,46 @@ The timer runs `t3-mask-janitor.service`, a one-shot with
 `/mnt/nvme5/casm_pipeline/logs/t3_mask_janitor.log`. It is independent of
 `t3-janitor.service`, which keeps the default `dumps` target.
 
-Per-event archive: `/mnt/nvme3/T3/EVENTS/<candname>/` holds the PNG, the
-result JSON, a single-beam float32 `.fil` of the detection beam and the
-`.slack` posting marker, on both nodes, with corr2's copy rsynced to
-corr1 by t3-collect. It is not under the janitor's quota, so watch
-/mnt/nvme3 by hand. To turn it off, run the plotter with
-`--events-root ''`.
+Per-event archive: `/mnt/nvme3/T3/EVENTS/<candname>/` is a schema-2 folder
+(casm_io `docs/t3_events.md`) on both nodes, with corr2's copy rsynced to corr1
+by t3-collect:
+
+    <cand>.png            Slack figure: hella's flags applied, or the raw beam labelled unavailable
+    <cand>_raw.png        the raw beam, labelled with the IB subtraction state
+    <cand>.fil            the detection beam, float32, about 55 MB
+    <cand>.mask.npz       hella's mask aligned to the fil (only when records covered the dump)
+    <cand>.json           summary (schema 2), also in --plots-dir and the archive tree
+    <cand>.t1.csv  <cand>.clusters.csv  <cand>.beams.csv
+    <cand>.manifest.json  written last: size and sha256 of every file above
+    .slack                posting marker written by t3-collect
+
+The plotter ships the two PNGs, the JSON and, after them, the manifest to the
+archive tree; the shipped manifest still names the files that stay on the node.
+It is not under the janitor's quota, so watch /mnt/nvme3 by hand. To turn the
+archive off, run the plotter with `--events-root ''` (the bundle is then built
+flat in `--plots-dir` without the fil, and the dump no longer waits for one).
+The dump is deleted after plotting (`--delete-dumps`) only when the fil (archive
+on), both PNGs, the summary and the manifest were written; otherwise the log says
+`keeping the dump of <cand>: <what> not written` and the janitor ages it out.
+
+Hella mask in the figures (`--mask-records DIR`, default `''` = off). With the
+records root of hella's `MASK_RECORD_DIR` (`/mnt/nvme4/data/casm/hella_masks`)
+the Slack figure has hella's recorded flags applied and `<cand>.mask.npz` is
+stored; without usable records the Slack figure is the raw beam titled `hella RFI
+flags unavailable (<reason>)` and the summary's `hella_mask` says why (reason
+table: architecture.md, "Event folder and hella's flags"). Check after the first
+events: `hella_mask.coverage` is 1.0, `hella_mask.gulps` is 1 to 3, and the log
+has no `mask lookup failed`.
+
+Deploy order. (1) casm_io `hella-mask` must be the checkout the services import
+(the plotter imports `casm_io.candidates.hella_mask` and `t3_event` at start, so
+an older casm_io fails every restart). (2) The records root must exist on both
+nodes before hella writes (`mkdir -p` on corr1 and corr2) and before the
+plotters get the flag. (3) Restart the hella observation with `MASK_RECORD_DIR`
+set, then both `t3-dump-plotter` units with `--mask-records <root>` added to
+their `ExecStart` (the unit files in `deploy/systemd/` do not carry it yet),
+then `t3-collect`, then the injection scheduler. Until the records exist, plotters
+started with the flag label every figure unavailable. To revert, drop the flag; no other state changes.
 
 Slack alerts no-op silently until a bot token exists at
 `~/.config/slack_api`.

@@ -7,7 +7,11 @@ with 64 beams, 3072 channels (descending frequency) and 64 inner samples
 per frame at the native 1.048576 ms sampling.
 
 Where multiple .dada files belong to one dump (dada_dbdisk rolls files),
-pass them all; they are concatenated in filename order.
+pass them all; they are ordered by each header's OBS_OFFSET (byte offsets in
+the file names are not zero-padded, so a name sort splices them wrongly) and
+concatenated. The returned header carries the absolute sample index of the
+first sample and whether the files butt together exactly, which is what
+aligns a dump with hella's per-gulp flag records.
 """
 
 from __future__ import annotations
@@ -40,6 +44,13 @@ class DumpHeader:
     t0: datetime              # UTC of the first sample in this file
     hdr_size: int
     raw: dict[str, str] = field(default_factory=dict)
+    # Absolute sample of the first sample from UTC_START: OBS_OFFSET / bytes_per_sample.
+    # None when OBS_OFFSET is absent or not a whole number of samples.
+    sample0: int | None = None
+    bytes_per_sample: int = 0        # nbeam * nchan * nbit / 8, bytes
+    # True when every file starts where the previous one ends (always for one file).
+    contiguous: bool = True
+    contiguity_note: str = ""        # why not, when contiguous is False
 
     @property
     def freqs_mhz(self) -> np.ndarray:
@@ -92,11 +103,18 @@ def parse_header(text: str) -> DumpHeader:
     if t0 is None:
         raise ValueError("dump header has no usable start time")
 
+    bytes_per_sample = nbeam * nchan * nbit // 8
+    sample0 = None
+    if "OBS_OFFSET" in raw:
+        quot, rem = divmod(int(raw["OBS_OFFSET"]), bytes_per_sample)
+        sample0 = quot if rem == 0 else None
+
     return DumpHeader(
         nchan=nchan, nbeam=nbeam, ninner=ninner, nbit=nbit,
         tsamp_s=tsamp_us * 1e-6,
         freq_top_mhz=freq_top, chan_width_mhz=chan_width,
         t0=t0, hdr_size=int(raw.get("HDR_SIZE", DEFAULT_HDR_SIZE)), raw=raw,
+        sample0=sample0, bytes_per_sample=bytes_per_sample,
     )
 
 
@@ -105,22 +123,70 @@ def read_header(path: str | Path) -> DumpHeader:
         return parse_header(f.read(DEFAULT_HDR_SIZE).decode(errors="replace"))
 
 
+def obs_offset(header: DumpHeader) -> int | None:
+    """OBS_OFFSET of a file, bytes into the observation, or None when absent."""
+    try:
+        return int(header.raw["OBS_OFFSET"])
+    except (KeyError, ValueError):
+        return None
+
+
+def check_contiguity(files: list[tuple[Path, DumpHeader]]) -> str | None:
+    """Why ``files`` (in the order given) are not one unbroken run, or None.
+
+    Each file must start at the previous file's OBS_OFFSET plus its data bytes,
+    belong to the same observation, and the previous file must end on a whole
+    frame (a trailing partial frame is dropped on read and would shift every
+    later sample). A gap or overlap anywhere makes sample indices past it wrong.
+    """
+    for path, hdr in files:
+        if obs_offset(hdr) is None:
+            return f"{path.name} has no OBS_OFFSET"
+    for (pa, ha), (pb, hb) in zip(files, files[1:]):
+        if ha.raw.get("UTC_START") != hb.raw.get("UTC_START"):
+            return f"{pa.name} and {pb.name} are from different observations"
+        frame_bytes = ha.nbeam * ha.nchan * ha.ninner * ha.nbit // 8
+        data_bytes = max(0, pa.stat().st_size - ha.hdr_size)
+        if data_bytes % frame_bytes:
+            return f"{pa.name} ends mid-frame ({data_bytes} data bytes)"
+        want = obs_offset(ha) + data_bytes
+        if obs_offset(hb) != want:
+            return (f"{pb.name} starts at byte {obs_offset(hb)}, expected {want} "
+                    f"after {pa.name}")
+    return None
+
+
 def read_beams(paths: list[str | Path], beams: list[int],
                sort_by_name: bool = True) -> tuple[DumpHeader, np.ndarray]:
     """Read selected local beams (0-63) from a dump.
 
     Returns the header of the first file and an array of shape
     (len(beams), nchan, ntime) in float32, channels in descending
-    frequency order.
+    frequency order. The header's ``sample0`` is the absolute sample index of
+    the first sample and ``contiguous`` says whether the files butt together
+    (see check_contiguity); a non-contiguous dump is still read, in order.
 
-    ``sort_by_name=False`` keeps the caller's order: byte offsets in the
-    filenames are not zero-padded, so a name sort puts 10000000 before
-    9000000 and splices the files in the wrong order.
+    ``sort_by_name`` (historical name) True orders the files by the OBS_OFFSET
+    in each header, numerically; the file names are not zero-padded, so a name
+    sort puts 10000000 before 9000000. Files without OBS_OFFSET fall back to
+    name order. False keeps the caller's order.
     """
+    paths = [Path(p) for p in paths]
+    pairs = [(p, read_header(p)) for p in paths]
     if sort_by_name:
-        paths = sorted(paths, key=lambda p: Path(p).name)
-    paths = list(paths)
-    header = read_header(paths[0])
+        if all(obs_offset(h) is not None for _, h in pairs):
+            pairs.sort(key=lambda ph: (obs_offset(ph[1]), ph[0].name))
+        else:
+            pairs.sort(key=lambda ph: ph[0].name)
+    paths = [p for p, _ in pairs]
+    header = pairs[0][1]
+    header.contiguity_note = check_contiguity(pairs) or ""
+    header.contiguous = not header.contiguity_note
+    if header.contiguous and header.sample0 is None:
+        header.contiguity_note = "OBS_OFFSET is not a whole number of samples"
+        header.contiguous = False
+    if not header.contiguous:
+        logger.warning("dump is not contiguous: %s", header.contiguity_note)
     dtype = np.float16 if header.nbit == 16 else np.float32
     frame_elems = header.nbeam * header.nchan * header.ninner
 
@@ -140,6 +206,6 @@ def read_beams(paths: list[str | Path], beams: list[int],
     if not per_file:
         raise ValueError(f"no complete frames in {paths}")
     out = np.concatenate(per_file, axis=2)
-    logger.info("read %s: beams=%s shape=%s t0=%s", Path(paths[0]).name, beams,
-                out.shape, header.t0.isoformat(timespec="milliseconds"))
+    logger.info("read %s: beams=%s shape=%s t0=%s sample0=%s", Path(paths[0]).name, beams,
+                out.shape, header.t0.isoformat(timespec="milliseconds"), header.sample0)
     return header, out

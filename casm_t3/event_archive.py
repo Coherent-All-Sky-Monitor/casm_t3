@@ -16,19 +16,39 @@ events end up in one place.
 The header recipe follows casm_io's beam_dump converter, including the
 rawdatafile length limit: filtool crashes when rawdatafile is 80 characters
 or longer, so only the basename is stored.
+
+The schema-2 folder (casm_io docs/t3_events.md) adds the raw figure, the
+hella mask, three CSVs, a summary JSON and a manifest written last. The helpers
+below build the pieces the summary needs (provenance, dump span, figure
+labels) and rebuild a trigger card from a stored folder for t3-replot.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import math
 import shutil
-from datetime import timezone
+import subprocess
+from datetime import timedelta, timezone
 from pathlib import Path
 
 import numpy as np
 from casm_io.filterbank import write_filterbank
 
+import casm_t3
+from casm_t2 import timing
+
 logger = logging.getLogger(__name__)
+
+# Timeout per git call behind the t3_commit provenance key, s.
+GIT_TIMEOUT_S = 5.0
+
+# Clock behind every UTC label in an event folder (the fil's tstart, event_utc).
+UTC_CLOCK = "TCS UTC_START from casm-corr1 system clock"
+
+UNAVAILABLE_LABEL = "hella RFI flags unavailable"
+SUB_INCOH_KEY = "BFCORR_SUB_INCOH"       # dump header key: IB subtraction on/off
 
 # filtool crashes at rawdatafile >= 80 chars; keep a margin.
 MAX_RAWDATAFILE = 78
@@ -104,3 +124,150 @@ def archive_event(events_root: Path, candname: str, files: list[Path]) -> Path:
             continue
         shutil.copy2(f, event_dir / f.name)
     return event_dir
+
+
+# --------------------------------------------------------------------------
+# schema-2 summary pieces
+# --------------------------------------------------------------------------
+
+def source_version(repo: str | Path | None = None) -> str:
+    """Git commit of the casm_t3 checkout this process imports from.
+
+    "<sha>" (12 hex digits) for a tree with no tracked changes, "<sha>+dirty"
+    when tracked files differ from HEAD, "unknown" when git cannot answer.
+    Never raises.
+    """
+    try:
+        repo = str(repo or Path(casm_t3.__file__).resolve().parent.parent)
+        head = subprocess.run(["git", "-C", repo, "rev-parse", "--short=12", "HEAD"],
+                              capture_output=True, text=True, timeout=GIT_TIMEOUT_S)
+        if head.returncode != 0 or not head.stdout.strip():
+            return "unknown"
+        status = subprocess.run(
+            ["git", "-C", repo, "status", "--porcelain", "--untracked-files=no"],
+            capture_output=True, text=True, timeout=GIT_TIMEOUT_S)
+        if status.returncode != 0:
+            return "unknown"
+    except Exception:  # provenance only: a failed lookup must not stop the daemon
+        return "unknown"
+    sha = head.stdout.strip()
+    return f"{sha}+dirty" if status.stdout.strip() else sha
+
+
+def sub_incoh_from_header(raw: dict) -> tuple[bool | None, str]:
+    """(IB subtraction state, source) from a dump header's key/value map.
+
+    BFCORR_SUB_INCOH "1"/"true" is on, "0"/"false" off, source "dump_header".
+    An absent or unreadable key is (None, "unknown"): the state is never assumed.
+    """
+    value = str((raw or {}).get(SUB_INCOH_KEY, "")).strip().lower()
+    if value in ("1", "true"):
+        return True, "dump_header"
+    if value in ("0", "false"):
+        return False, "dump_header"
+    return None, "unknown"
+
+
+def sub_state_text(sub_incoh: bool | None) -> str:
+    """"on", "off" or "unknown" for a figure label."""
+    return "unknown" if sub_incoh is None else ("on" if sub_incoh else "off")
+
+
+def raw_label(sub_incoh: bool | None) -> str:
+    """Title note of the raw figure, which states the IB subtraction state."""
+    return f"before hella RFI flagging; IB subtraction {sub_state_text(sub_incoh)}"
+
+
+def unavailable_label(reason: str | None = None) -> str:
+    """Title note of a figure drawn without hella's flags."""
+    return f"{UNAVAILABLE_LABEL} ({reason})" if reason else UNAVAILABLE_LABEL
+
+
+def hella_provenance(win) -> dict:
+    """Binary md5, cfg sha256 and flag settings of the first record header of ``win``.
+
+    Empty when there is no window or no header (the summary then holds nulls).
+    """
+    headers = getattr(win, "headers", None) or []
+    if not headers:
+        return {}
+    h = headers[0]
+    return {"hella_binary_md5": h.binary_md5, "hella_cfg_sha256": h.cfg_sha256,
+            "hella_flag": {"flag1": h.flag1, "flag2": h.flag2, "st_mmin": h.st_mmin,
+                           "st_nbin": h.st_nbin, "st_mmax": h.st_mmax, "st_nb": h.st_nb,
+                           "st_chi1": h.st_chi1, "st_rho": h.st_rho,
+                           "blank_cnt": h.blank_cnt}}
+
+
+def dump_span(header, nsamp: int, host: str) -> dict:
+    """The summary's ``dump`` entry for ``nsamp`` samples read from ``header``'s dump."""
+    t0 = header.t0
+    t1 = t0 + timedelta(seconds=nsamp * header.tsamp_s)
+    return {"utc_start": t0.isoformat(timespec="milliseconds"),
+            "utc_stop": t1.isoformat(timespec="milliseconds"),
+            "sample0": header.sample0, "nsamp": int(nsamp), "host": host}
+
+
+# --------------------------------------------------------------------------
+# a card from a stored folder
+# --------------------------------------------------------------------------
+
+def _num(x):
+    """float, or None for NaN (an empty CSV cell)."""
+    x = float(x)
+    return None if math.isnan(x) else x
+
+
+def card_from_event(ev) -> dict:
+    """The trigger card the figure needs, from a casm_io ``T3Event``.
+
+    Schema 1: the card is the folder's JSON. Schema 2: the card is rebuilt from
+    the summary and the three CSVs (the ``gulp`` block, ``context.members`` and
+    ``pointings`` that the summary no longer carries). A card with no
+    ``trigger.gulp`` gets no ``gulp`` block, as before.
+    """
+    if ev.schema == 1:
+        return json.loads((ev.path / f"{ev.candname}.json").read_text())
+    s = ev.summary
+    prov, trig = s.get("provenance") or {}, s.get("trigger") or {}
+    keys = ("candname", "event_utc", "snr", "dm", "width", "beam", "local_beam", "stream",
+            "samp", "n_beams", "n_members", "sky_extent_deg", "trigger_reason", "source", "sky")
+    card = {k: s[k] for k in keys if s.get(k) is not None}
+    if len(ev.beams):
+        card["pointings"] = {
+            "weights_id": prov.get("weights_id"),
+            "alt_deg": ev.beams["alt_deg"].tolist(), "az_deg": ev.beams["az_deg"].tolist(),
+            "beam_fwhm_x_deg": prov.get("beam_fwhm_x_deg"),
+            "beam_fwhm_y_deg": prov.get("beam_fwhm_y_deg")}
+    t = ev.trials
+    members = t[t["origin"].isin(["context", "both"])]
+    card["context"] = {
+        "window_s": trig.get("context_window_s"),
+        "members": [[float(r.dt_s), int(r.beam), float(r.dm), float(r.snr), int(r.width_idx)]
+                    for r in members.itertuples()]}
+    if trig.get("gulp") is not None:
+        from casm_io.candidates.t3_event import cluster_beams
+        in_gulp = t[t["in_trigger_gulp"] == 1]
+        clusters = []
+        for r in ev.clusters.itertuples():
+            clusters.append({
+                "id": int(r.id),
+                "peak": [float(r.peak_dt_s), int(r.peak_beam), float(r.peak_dm),
+                         float(r.peak_snr), int(r.peak_width_idx)],
+                "n_trials": int(r.n_trials),
+                "beams": [[b, v] for b, v in cluster_beams(r.beams)],
+                "sky_extent_deg": _num(r.sky_extent_deg), "dm_lo": _num(r.dm_lo),
+                "dm_hi": _num(r.dm_hi), "outcome": r.outcome, "detail": r.detail})
+        card["gulp"] = {
+            "gulp": trig["gulp"], "utc_start": prov.get("obs_utc_start"),
+            "samp_lo": trig.get("samp_lo"), "samp_hi": trig.get("samp_hi"),
+            "tsamp_s": timing.TSAMP_S, "weights_id": prov.get("weights_id"),
+            "n_raw": trig.get("n_raw"), "n_width_dropped": trig.get("n_width_dropped"),
+            "n_shed": trig.get("n_shed"), "n_trials_total": trig.get("n_trials_total"),
+            "trials_truncated": trig.get("trials_truncated"),
+            "n_clusters_total": trig.get("n_clusters_total"),
+            "clusters_truncated": trig.get("clusters_truncated"),
+            "trials": [[float(r.dt_s), int(r.beam), float(r.dm), float(r.snr),
+                        int(r.width_idx), int(r.cluster_id)] for r in in_gulp.itertuples()],
+            "clusters": clusters, "rules": s.get("rules"), "storm": s.get("storm")}
+    return card

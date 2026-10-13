@@ -13,7 +13,9 @@ human labels are its single write path.
 ## What's here
 
 `dump_reader` parses casm_cand_dump `.dada` files (4096-byte ASCII
-header, float16, 64 beams x 3072 channels). `single_pulse` has the
+header, float16, 64 beams x 3072 channels), orders the files of one dump by
+`OBS_OFFSET`, checks they are contiguous and gives the absolute first sample
+(`sample0`) that aligns the dump with hella's flag records. `single_pulse` has the
 numerics: per-channel normalisation, incoherent dedispersion, boxcar S/N,
 a DM-time transform in true S/N units, and validity-weighted twins of these
 for masked data. `plotting` renders the five-panel
@@ -29,7 +31,8 @@ extracted from the beamforming weights so offline nodes don't need the
 400 MB HDF5.
 
 The daemons: `t3-dump-plotter` (polls the T2 spool, waits for the dump to
-settle, plots, ships artifacts, keeps a per-event archive),
+settle, plots the figure pair, ships artifacts, keeps a schema-2 per-event
+folder; `--mask-records DIR` applies hella's own RFI flags),
 `t3-janitor` (size and age quotas on the dump trees; never deletes
 anything labelled frb or pulsar; `--targets hella_masks` runs the same
 kind of sweep over hella's flag-record chunks, run hourly by
@@ -92,36 +95,55 @@ as `unavailable` and left alone.
 
 ## Event archive
 
-Each event gets a directory under `--events-root` (default
-`/mnt/nvme3/T3/EVENTS`) on the node that made the dump:
+Each event gets a schema-2 folder (casm_io `docs/t3_events.md`) under
+`--events-root` (default `/mnt/nvme3/T3/EVENTS`) on the node that made the dump:
 
     <events-root>/<candname>/
-        <candname>.png     the figure that goes to Slack
-        <candname>.json    the result record
-        <candname>.fil     the detection beam
-        .slack             written by t3-collect once the PNG is posted
+        <candname>.png            the figure that goes to Slack
+        <candname>_raw.png        the same beam before hella flagging
+        <candname>.fil            the detection beam
+        <candname>.mask.npz       hella's mask aligned to the fil (when records covered the dump)
+        <candname>.json           summary: candidate, trigger, provenance, mask statistics
+        <candname>.t1.csv  .clusters.csv  .beams.csv
+        <candname>.manifest.json  size and sha256 of every file above, written last
+        .slack                    written by t3-collect once the PNG is posted
+
+With `--mask-records DIR` (hella's per-gulp flag records, casm_io
+`docs/hella_masks.md`) the Slack figure has hella's recorded flags applied:
+every panel is computed from the unflagged cells and the title says `hella RFI
+flags applied`. The records are found by absolute sample index (the dump
+header's `OBS_OFFSET`), so a dump that is not contiguous gets no mask. Without
+usable records the Slack figure is the raw beam titled `hella RFI flags
+unavailable (<reason>)`. The raw figure's title states the IB subtraction state
+read from the dump header (`BFCORR_SUB_INCOH`), `on`, `off` or `unknown`. The
+flag is off by default. See docs/architecture.md "Event folder and hella's flags"
+and docs/operations.md for the reasons, the deploy order and the delete rule.
 
 The `.fil` is a single-beam float32 SIGPROC filterbank of the detection
 beam only, roughly 55 MB. The other 63 beams go away with the `.dada`,
-which is still deleted right after plotting — the archive is written
-first. Writing it never blocks the figure or the artifact shipping: a
-failure is logged and the event goes on.
+which is deleted right after plotting, but only once the fil, both PNGs, the
+summary and the manifest are written; otherwise the dump stays and the log says
+what is missing. Writing the fil, the mask or the CSVs never blocks the
+figure or the artifact shipping: a failure is logged and the event goes on.
 
-`t3-collect` rsyncs corr2's event tree to corr1 alongside the artifact
-pull, so both nodes' events land in one place, and mirrors the `.slack`
+The plotter ships the two PNGs and the summary JSON to the archive tree, then
+the manifest. `t3-collect` rsyncs corr2's event tree to corr1 alongside the
+artifact pull, so both nodes' events land in one place, and mirrors the `.slack`
 marker into the event directory after a successful post. Pass
-`--events-root ''` to the plotter to turn the whole thing off.
+`--events-root ''` to the plotter to turn the archive off.
 
-Schema-2 folders (casm_io `docs/t3_events.md`) are posted differently. The
-plotter writes `<candname>.manifest.json` last, and `t3-collect` posts only
-once it exists, parses, and agrees with the PNG sizes on disk; a folder without
-it is incomplete and is retried every cycle with no marker. The main figure
+Schema-2 folders are posted differently. `t3-collect` posts only
+once the manifest exists, parses, and agrees with the PNG sizes on disk; a folder
+without it is incomplete and is retried every cycle with no marker. The main figure
 goes first (marker line `kind=main`), then `<candname>_raw.png` as a thread
 reply to it (`kind=raw`, or `kind=raw_unthreaded` when the main post's message
 ts did not resolve). The two posts are tracked separately: a failed reply is
 retried on later cycles without reposting the main figure. Schema-1 folders
 keep the single-line marker and get no raw post. `t3-collect` never rewrites a
 candidate's JSON, which `rsync -a` mirrors from corr2.
+
+`t3-replot --event-dir <folder> --view masked|raw|both` re-renders a stored
+folder (either schema) from its fil and mask.
 
 `t3-janitor` does not touch the event tree. It sweeps the `.dada` dump
 directories and, with `--targets hella_masks`, hella's mask-record chunks
@@ -143,7 +165,12 @@ v2 figure. `--no-pulse` renders the dump untouched for comparison,
 `--clean hella` passes the beam (pulse included) through the deployed hella
 flagging stage first (`single_pulse.hella_clean`; also on `t3-replot`),
 `--card-json` writes the synthetic card, `--fil` writes the beam plus pulse
-as a float32 single-beam filterbank. When there is no matched cluster (or
+as a float32 single-beam filterbank. `--mask-records DIR` with `--raw-out PATH`
+draws the replay with hella's recorded flags applied at `--out` and the beam
+before flagging at `--raw-out`, both titled `synthetic replay; ...` (the pulse
+is added here, the records describe the live stream); without coverage
+`--clean hella` keeps the offline replica, labelled as one. The card JSON gains
+`kind: "synthetic_replay"` and `hella_mask`. When there is no matched cluster (or
 you are replaying into a dump from a different observation), give
 `--event-utc` or `--event-offset-s` and, if the beam differs,
 `--local-beam`; `--dm/--amp/--sigma-ms` override the injected parameters.
