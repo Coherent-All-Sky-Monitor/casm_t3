@@ -243,9 +243,10 @@ Uncovered samples are unavailable, not unflagged data: they are excluded from
 the normalisation statistics and every profile, and the profile is NaN where
 no channel has a record.
 
-Drawing. Flagged cells are NaN in the image colour maps and show as neutral
-grey (`FLAGGED_COLOR`). Cells whose source samples have no record show as a
-lighter grey under a hatch (`UNCOVERED_COLOR`), so "unknown" differs from
+Drawing. Flagged cells are NaN in the image colour maps and show in the colour
+map's lowest colour (`FLAGGED_COLOR`), as hella's zeroed cells look in the
+injection replay. Cells whose source samples have no record show as a light
+grey under a hatch (`UNCOVERED_COLOR`), so "unknown" differs from
 "flagged"; the waterfall classifies them per cell in the dedispersed frame
 (a gap is slanted by the sweep), the DM-time panel per trial DM. A small key on
 each image panel lists the two kinds actually drawn in its window. It sits under
@@ -261,7 +262,7 @@ Title. The suffix goes at the end of line 2, after the width:
 |---|---|
 | `mask` | `hella RFI flags applied` |
 | `mask` and `coverage` with any False | `hella RFI flags applied (partial coverage)` |
-| `mask_label` alone (raw figure) | the label, for example `before hella RFI flagging; IB subtraction off` |
+| `mask_label` alone (raw figure) | the label, for example `raw intensity, before hella RFI flagging; IB subtraction off` |
 | `mask` and `mask_label` | the label, plus ` (partial coverage)` when coverage is partial |
 
 "Partial coverage" refers to the whole data window, which is what the

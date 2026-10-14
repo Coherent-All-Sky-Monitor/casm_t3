@@ -18,7 +18,7 @@ from casm_t3.apps import replay_injection as ri
 
 UTC_START = "2026-10-13-18:22:38"
 MASKED = "synthetic replay; hella RFI flags applied"
-RAW = "synthetic replay; before hella RFI flagging"
+RAW = "synthetic replay; raw intensity, before hella RFI flagging"
 
 
 def _ledger(tmp_path) -> Path:

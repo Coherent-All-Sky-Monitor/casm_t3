@@ -108,7 +108,7 @@ from the cluster peak. No block (unrecovered shot, shots before 2026-09-22, or
 records covering the replay window for the injected global beam (casm_io
 `docs/hella_masks.md`), `--out` is drawn with the recorded flags applied and
 `--raw-out` is the same beam before flagging. Titles end `synthetic replay; hella
-RFI flags applied` and `synthetic replay; before hella RFI flagging`: the pulse
+RFI flags applied` and `synthetic replay; raw intensity, before hella RFI flagging`: the pulse
 is added here, the records describe the live stream that carried the real
 injection. The flags replace `--clean hella` for that figure. When nothing
 covers the window, `--clean hella` keeps the offline replica path (title
@@ -256,7 +256,7 @@ Schema-2 events (casm_io `docs/t3_events.md`) post in two steps. `t3-collect`
 waits for `<candname>.manifest.json` in the candidate dir (the plotter writes it
 last, and it must parse and agree with the PNG sizes on disk), posts
 `<candname>.png` with the usual caption, then posts `<candname>_raw.png` as a
-thread reply with the caption "raw view, before hella RFI flagging". The
+thread reply with the caption "raw intensity, before hella RFI flagging". The
 `.slack` marker carries one line per post:
 
     posted <iso> ts=<ts> channel=<id> kind=main

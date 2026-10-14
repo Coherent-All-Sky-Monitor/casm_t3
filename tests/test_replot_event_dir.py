@@ -14,7 +14,7 @@ from casm_t3 import dump_reader, event_archive, fil_reader
 from casm_t3.apps import replot
 
 NAMES = t3_event.product_names(se.CANDNAME)
-RAW = "before hella RFI flagging; IB subtraction off"
+RAW = "raw intensity, before hella RFI flagging; IB subtraction off"
 
 
 @pytest.fixture
@@ -104,7 +104,7 @@ def test_schema_1_folder_re_renders_with_an_unknown_ib_state(tmp_path, monkeypat
     calls = ee.stub_figure(monkeypatch)
     replot.render_event_dir(d, tmp_path / "x.png", "both")
     assert calls[0]["mask_label"].startswith("hella RFI flags unavailable (schema 1 event")
-    assert calls[1]["mask_label"] == "before hella RFI flagging; IB subtraction unknown"
+    assert calls[1]["mask_label"] == "raw intensity, before hella RFI flagging; IB subtraction unknown"
     assert calls[0]["card"]["gulp"]["trials"] == json.loads(env.card_path.read_text())["gulp"]["trials"]
 
 

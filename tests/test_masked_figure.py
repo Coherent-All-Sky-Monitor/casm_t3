@@ -107,7 +107,7 @@ def test_raw_figure_arrays_equal_the_pre_mask_numerics():
 
 def test_raw_figure_with_only_a_label_is_the_raw_figure_plus_a_title_note():
     d = _dump()
-    label = "before hella RFI flagging; IB subtraction off"
+    label = "raw intensity, before hella RFI flagging; IB subtraction off"
     with _drawn(d) as (fig_a, axes_a, _):
         text_a = fig_a._suptitle.get_text()
         y_a = np.asarray(axes_a["dm0"].lines[0].get_ydata())
@@ -312,7 +312,7 @@ def test_titles_say_what_was_applied_and_nothing_stronger():
     cov = np.ones(d["data"].shape[1], dtype=bool)
     part = cov.copy()
     part[1300:1700] = False
-    raw_label = "before hella RFI flagging; IB subtraction off"
+    raw_label = "raw intensity, before hella RFI flagging; IB subtraction off"
     cases = [(dict(), None),
              (dict(mask=d["mask"]), "hella RFI flags applied"),
              (dict(mask=d["mask"], coverage=cov), "hella RFI flags applied"),
@@ -350,7 +350,7 @@ def test_mask_does_not_move_a_panel_and_leaves_the_bottom_row_alone(tmp_path):
     assert max(abs(a - b) for k in ref for a, b in zip(ref[k], boxes[k])) == 0.0
 
     raw = plotting.make_candidate_figure(arr, freqs, tsamp, t_rel, card, tmp_path / "raw.png",
-                                         mask_label="before hella RFI flagging; IB subtraction off")
+                                         mask_label="raw intensity, before hella RFI flagging; IB subtraction off")
     masked = plotting.make_candidate_figure(arr, freqs, tsamp, t_rel, card, tmp_path / "masked.png",
                                             mask=mask, coverage=cov)
     a, b = mimage.imread(raw), mimage.imread(masked)

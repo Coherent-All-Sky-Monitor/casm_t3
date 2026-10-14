@@ -54,7 +54,7 @@ DEFAULT_GULP_DIR = "/mnt/nvme5/casm_pipeline/injection_gulps"
 
 # Figure title notes; the pulse is synthetic whatever the flags say.
 LABEL_MASKED = "synthetic replay; hella RFI flags applied"
-LABEL_RAW = "synthetic replay; before hella RFI flagging"
+LABEL_RAW = "synthetic replay; raw intensity, before hella RFI flagging"
 LABEL_REPLICA = "synthetic replay; offline replica of hella flagging"
 
 
@@ -383,7 +383,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--out", required=True, help="output PNG")
     p.add_argument("--raw-out", metavar="PATH",
                    help="also write the figure before hella flagging here "
-                        "(title: synthetic replay; before hella RFI flagging)")
+                        "(title: synthetic replay; raw intensity, before hella RFI flagging)")
     p.add_argument("--mask-records", default="", metavar="DIR",
                    help="hella's per-gulp flag records (casm_io docs/hella_masks.md); when "
                         "they cover the replay window for the injected beam, --out is drawn "

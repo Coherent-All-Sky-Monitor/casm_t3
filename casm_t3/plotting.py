@@ -24,7 +24,7 @@ The approved prototype this was ported from is
 With ``mask`` (hella's recorded flags, True = flagged) every panel is computed
 from the unflagged cells only, through the validity-weighted numerics in
 single_pulse (normalise_masked ... dm_time_masked). Flagged cells are drawn
-grey, time with no flag record (``coverage`` False) hatched, and the title says
+in the colour map's lowest colour, time with no flag record (``coverage`` False) hatched, and the title says
 "hella RFI flags applied". Without it the figure is the raw dump as always, and
 ``mask_label`` alone only adds a note to the title line (the raw twin of a
 masked figure).
@@ -610,7 +610,7 @@ def corner_right_fracs(ax, arts, renderer) -> list[float]:
 
 MASK_TAG = "hella RFI flags applied"
 PARTIAL_TAG = "partial coverage"
-FLAGGED_COLOR = "#8c8c8c"        # flagged cells: neutral grey, the image colour maps' "bad" colour
+FLAGGED_COLOR = mcolors.to_hex(plt.get_cmap(WATERFALL_CMAP)(0.0))   # flagged cells: the colour map's lowest colour, as hella's zeroed cells look
 UNCOVERED_COLOR = "#e6e6e6"      # no flag record: lighter neutral under a hatch
 UNCOVERED_HATCH = "////"
 UNCOVERED_EDGE = "0.55"
@@ -671,7 +671,7 @@ def _overlay_uncovered_cells(ax, uncovered: np.ndarray, extent: tuple, origin: s
 
 
 def _mask_key(ax, flagged: bool, uncovered: bool) -> None:
-    """Small key for the grey and hatched cells actually present in an image panel.
+    """Small key for the flagged and hatched cells actually present in an image panel.
 
     Drawn under the panel, right-aligned with its edge, on the x-label line and
     clear of the label (centred) and the tick labels above it, so no data cell is

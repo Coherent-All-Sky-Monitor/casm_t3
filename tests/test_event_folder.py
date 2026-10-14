@@ -22,7 +22,7 @@ from casm_t3 import dump_reader, event_archive, fil_reader
 from casm_t3.apps import dump_plotter
 
 NAMES = t3_event.product_names(se.CANDNAME)
-RAW_LABEL = "before hella RFI flagging; IB subtraction off"
+RAW_LABEL = "raw intensity, before hella RFI flagging; IB subtraction off"
 
 
 def _present(d: Path) -> set:
@@ -132,7 +132,7 @@ def test_ib_subtraction_state_is_read_from_the_dump_header(tmp_path, monkeypatch
     env.process()
     text = {True: "on", False: "off", None: "unknown"}[state]
     assert ee.call_for(calls, NAMES["raw_png"])["mask_label"] == \
-        f"before hella RFI flagging; IB subtraction {text}"
+        f"raw intensity, before hella RFI flagging; IB subtraction {text}"
     prov = env.summary()["provenance"]
     assert prov["sub_incoh"] is state and prov["sub_incoh_source"] == source
 

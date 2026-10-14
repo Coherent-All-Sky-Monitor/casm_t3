@@ -24,7 +24,8 @@ DM-time bowtie, beam-vs-time context scatter), framed so the pulse always
 sits at t=0 and plots are comparable across events. Given hella's recorded
 flag mask (`mask=`, `coverage=`, `mask_label=` on `make_candidate_figure`,
 v2 layout) every panel is computed from the unflagged cells only, with flagged
-cells drawn grey and time with no flag record hatched; see
+cells drawn in the colour map's lowest colour (as hella's zeroed cells look) and time
+with no flag record hatched; see
 docs/architecture.md "Masked figures". `skypos` converts
 beam number plus event time to RA/Dec; the pointing table is an 8 KB JSON
 extracted from the beamforming weights so offline nodes don't need the

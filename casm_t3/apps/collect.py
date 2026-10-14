@@ -173,10 +173,10 @@ def _post_raw(d: Path, marker: _Marker, web_base: str, max_age_h: float,
         return
     threaded = marker.main_ts not in (None, "", "unknown")
     if threaded:
-        caption = "raw view, before hella RFI flagging"
+        caption = "raw intensity, before hella RFI flagging"
     else:
         link = f"<{web_base.rstrip('/')}/cands/{d.name}|{d.name}>"
-        caption = f"*{link}* raw view, before hella RFI flagging"
+        caption = f"*{link}* raw intensity, before hella RFI flagging"
     channel = marker.channel if marker.channel not in (None, "", "unknown") else None
     res = alerts.post_candidate(raw_png, caption, channel=channel,
                                 thread_ts=marker.main_ts if threaded else None)

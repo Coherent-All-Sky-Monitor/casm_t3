@@ -183,7 +183,7 @@ def main() -> None:
         c = card(tmp / "dump")
         t_rel = (datetime.fromisoformat(c["event_utc"]) - header.t0).total_seconds()
         for name, kw in (("masked", dict(mask=win.combined, coverage=win.coverage)),
-                         ("raw", dict(mask_label="before hella RFI flagging; IB subtraction off"))):
+                         ("raw", dict(mask_label="raw intensity, before hella RFI flagging; IB subtraction off"))):
             print(plotting.make_candidate_figure(data[0], header.freqs_mhz, header.tsamp_s, t_rel, c,
                                                  out / f"{name}.png", **kw))
 

@@ -76,7 +76,7 @@ def main() -> None:
     cov = np.ones(d["data"].shape[1], dtype=bool)
     cov[1000:1900] = False                                     # 0.9 s with no flag record, before the pulse
     for name, kw in (("masked", dict(mask=d["mask"], coverage=cov)),
-                     ("raw", dict(mask_label="before hella RFI flagging; IB subtraction off"))):
+                     ("raw", dict(mask_label="raw intensity, before hella RFI flagging; IB subtraction off"))):
         print(plotting.make_candidate_figure(d["data"], d["freqs"], d["tsamp"], d["t_rel"], card,
                                              out / f"{name}.png", **kw))
 

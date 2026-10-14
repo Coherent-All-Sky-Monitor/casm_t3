@@ -13,7 +13,7 @@ from casm_t3.apps import collect
 NAME = "261013nnuclj"
 CHANNEL = "C0TEST"
 MAIN_TS = "1760380000.000100"
-RAW_CAPTION = "raw view, before hella RFI flagging"
+RAW_CAPTION = "raw intensity, before hella RFI flagging"
 
 
 class Slack:
@@ -154,7 +154,7 @@ def test_unknown_main_ts_posts_raw_unthreaded_with_the_candidate_named(tmp_path,
     _post(tmp_path)
     raw = slack.calls[1]
     assert raw["thread_ts"] is None
-    assert NAME in raw["text"] and "raw view" in raw["text"]
+    assert NAME in raw["text"] and "raw intensity" in raw["text"]
     lines = _marker(d).splitlines()
     assert "ts=unknown" in lines[0] and "kind=main" in lines[0]
     assert lines[1].endswith("kind=raw_unthreaded")

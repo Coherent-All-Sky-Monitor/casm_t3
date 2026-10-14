@@ -175,7 +175,7 @@ def sub_state_text(sub_incoh: bool | None) -> str:
 
 def raw_label(sub_incoh: bool | None) -> str:
     """Title note of the raw figure, which states the IB subtraction state."""
-    return f"before hella RFI flagging; IB subtraction {sub_state_text(sub_incoh)}"
+    return f"raw intensity, before hella RFI flagging; IB subtraction {sub_state_text(sub_incoh)}"
 
 
 def unavailable_label(reason: str | None = None) -> str:
